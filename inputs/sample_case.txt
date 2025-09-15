@@ -1,0 +1,3 @@
+Clue 1: The door was unlocked.
+Clue 2: A note was found on the table.
+Clue 3: No fingerprints on the glass.
