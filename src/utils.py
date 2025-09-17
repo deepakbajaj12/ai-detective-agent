@@ -1,3 +1,62 @@
+def test_visualize_case_graph():
+    clues = ["The door was unlocked.", "A note was found on the table.", "No fingerprints on the glass."]
+    suspects = ["Alice", "Bob"]
+    events = ["Entry", "Note discovery"]
+    relationships = [
+        ("The door was unlocked.", "Entry", "related"),
+        ("A note was found on the table.", "Note discovery", "related"),
+        ("No fingerprints on the glass.", "Alice", "possible suspect"),
+        ("Entry", "Bob", "possible suspect"),
+        ("Note discovery", "Alice", "possible suspect")
+    ]
+    visualize_case_graph(clues, suspects, events, relationships)
+# --- Interactive Graph Visualization ---
+# Requires: pip install networkx matplotlib
+import networkx as nx
+import matplotlib.pyplot as plt
+
+def visualize_case_graph(clues, suspects, events, relationships):
+    """
+    Visualizes relationships between clues, suspects, and events as a network graph.
+    clues: list of clue strings
+    suspects: list of suspect names
+    events: list of event descriptions
+    relationships: list of tuples (source, target, label)
+    """
+    G = nx.DiGraph()
+    for clue in clues:
+        G.add_node(clue, type='clue')
+    for suspect in suspects:
+        G.add_node(suspect, type='suspect')
+    for event in events:
+        G.add_node(event, type='event')
+    for src, tgt, label in relationships:
+        G.add_edge(src, tgt, label=label)
+
+    # Hierarchical layout: suspects (top), clues (middle), events (bottom)
+    layers = [suspects, clues, events]
+    pos = {}
+    y_gap = 2
+    for i, layer in enumerate(layers):
+        x_gap = 2
+        for j, node in enumerate(layer):
+            pos[node] = (j * x_gap, -i * y_gap)
+
+    node_colors = []
+    for node in G.nodes(data=True):
+        if node[1]['type'] == 'clue':
+            node_colors.append('skyblue')
+        elif node[1]['type'] == 'suspect':
+            node_colors.append('salmon')
+        else:
+            node_colors.append('lightgreen')
+
+    nx.draw(G, pos, with_labels=True, node_color=node_colors, edge_color='gray', node_size=1200, font_size=10, arrows=True)
+    edge_labels = nx.get_edge_attributes(G, 'label')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
+    plt.title('Case Relationships Graph (Hierarchical)')
+    plt.tight_layout()
+    plt.show()
 import pandas as pd
 import numpy as np
 
