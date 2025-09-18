@@ -1,3 +1,35 @@
+# --- Automated Clue Extraction from Text/PDFs ---
+import pdfplumber
+import spacy
+
+def extract_text_from_pdf(pdf_path):
+    """
+    Extracts all text from a PDF file using pdfplumber.
+    """
+    text = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text += page.extract_text() + "\n"
+    return text
+
+def extract_clues_from_text(text, keywords=None):
+    """
+    Extracts clue-like sentences from text using spaCy NLP.
+    Optionally filter by keywords (list of strings).
+    """
+    nlp = spacy.load('en_core_web_sm')
+    doc = nlp(text)
+    clues = []
+    for sent in doc.sents:
+        sent_text = sent.text.strip()
+        if keywords:
+            if any(kw.lower() in sent_text.lower() for kw in keywords):
+                clues.append(sent_text)
+        else:
+            # Heuristic: sentences with 'clue', 'found', 'evidence', 'suspect', 'note', etc.
+            if any(word in sent_text.lower() for word in ['clue', 'found', 'evidence', 'suspect', 'note', 'fingerprint', 'door', 'glass']):
+                clues.append(sent_text)
+    return clues
 def test_visualize_case_graph():
     clues = ["The door was unlocked.", "A note was found on the table.", "No fingerprints on the glass."]
     suspects = ["Alice", "Bob"]
