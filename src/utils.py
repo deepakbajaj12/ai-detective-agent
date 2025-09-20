@@ -1,3 +1,28 @@
+# --- Advanced NLP Features ---
+def extract_entities_and_relations(clues):
+    """
+    Extracts named entities (person, location, date, etc.) and relationships from clues using spaCy.
+    Returns a list of dicts: {clue, entities, relations}
+    """
+    nlp = spacy.load('en_core_web_sm')
+    results = []
+    for clue in clues:
+        doc = nlp(clue)
+        entities = [(ent.text, ent.label_) for ent in doc.ents]
+        # Simple relation extraction: look for subject-verb-object triples
+        relations = []
+        for token in doc:
+            if token.dep_ == 'ROOT' and token.pos_ == 'VERB':
+                subj = [w for w in token.lefts if w.dep_ in ('nsubj', 'nsubjpass')]
+                obj = [w for w in token.rights if w.dep_ in ('dobj', 'pobj', 'attr')]
+                if subj and obj:
+                    relations.append((subj[0].text, token.text, obj[0].text))
+        results.append({
+            'clue': clue,
+            'entities': entities,
+            'relations': relations
+        })
+    return results
 # --- Automated Clue Extraction from Text/PDFs ---
 import pdfplumber
 import spacy
@@ -179,3 +204,5 @@ def read_clues(file_path: str) -> list[str]:
     except FileNotFoundError:
         print(f"⚠️ File not found: {file_path}")
         return []
+
+
