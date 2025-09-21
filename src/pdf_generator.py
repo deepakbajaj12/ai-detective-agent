@@ -1,7 +1,13 @@
+import os
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 
 def save_report(clues, deductions, output_path):
+    # Ensure the output directory exists
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
     c = canvas.Canvas(output_path, pagesize=A4)
     width, height = A4
     y = height - 50
@@ -10,7 +16,6 @@ def save_report(clues, deductions, output_path):
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, y, "🕵️ AI Detective Report")
     y -= 30
-
     # Clues
     c.setFont("Helvetica-Bold", 14)
     c.drawString(50, y, "Clues:")
