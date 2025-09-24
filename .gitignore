@@ -1,4 +1,72 @@
-# Byte-compiled / optimized / DLL files
+#############################
+# Python
+#############################
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment / secrets
+.env
+*.env.local
+*.env.test
+
+# Logs & temp
+*.log
+*.tmp
+*.swp
+
+#############################
+# Node / React frontend
+#############################
+detective-frontend/node_modules/
+detective-frontend/build/
+detective-frontend/dist/
+detective-frontend/.cache/
+
+# Frontend lock files (optional – keep one if you want reproducibility)
+# yarn.lock
+# package-lock.json
+
+#############################
+# Outputs & generated artifacts
+#############################
+outputs/*.pdf
+outputs/*.png
+outputs/*.svg
+outputs/*.html
+
+# Model artifacts
+*.joblib
+*.pkl
+*.pickle
+models/
+
+#############################
+# OS / Editor
+#############################
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+#############################
+# Reports / notebooks (optional)
+#############################
+*.ipynb_checkpoints/
+
+# If you want to keep the outputs folder itself tracked, place a .gitkeep inside it.# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class

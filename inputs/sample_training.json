@@ -1,0 +1,11 @@
+[
+  {"text": "The door was unlocked and no signs of forced entry", "label": "Alice"},
+  {"text": "A note on the table mentioning a meeting with Bob", "label": "Bob"},
+  {"text": "No fingerprints on the glass, gloves likely used", "label": "Charlie"},
+  {"text": "Witness saw Alice near the house last night", "label": "Alice"},
+  {"text": "Security footage showed Bob entering at 9 PM", "label": "Bob"},
+  {"text": "Charlie's car spotted close to the scene", "label": "Charlie"},
+  {"text": "Unlocked window suggests a careful entry", "label": "Alice"},
+  {"text": "A handwritten note signed by Bob", "label": "Bob"},
+  {"text": "Latex glove fragments recovered from trash", "label": "Charlie"}
+]
