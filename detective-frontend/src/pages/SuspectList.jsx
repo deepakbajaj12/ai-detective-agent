@@ -63,18 +63,20 @@ export default function SuspectList() {
     <Box sx={{ position:'relative' }}>
       <Grid container spacing={2}>
         {suspects.map((s) => {
-          const tier = scoreTier(s.score || 0);
-          const pct = Math.min(100, (s.score||0)*100).toFixed(1);
+          const tier = scoreTier(s.composite_score ?? s.score ?? 0);
+          const mlPct = ((s.score||0)*100).toFixed(1);
+          const evPct = ((s.evidence_score||0)*100).toFixed(1);
+          const compPct = ((s.composite_score||s.score||0)*100).toFixed(1);
           return (
             <Grid key={s.id} item xs={12} sm={6} md={4}>
               <Card component={RouterLink} to={`/suspects/${s.id}`} sx={{ textDecoration: 'none', position:'relative' }}>
                 <CardHeader
                   avatar={<Avatar src={s.avatar} alt={s.name} />}
                   title={<Stack direction="row" spacing={1} alignItems="center"><span>{s.name}</span><Chip size="small" label={tier.label} color={tier.color} /></Stack>}
-                  subheader={`Score: ${pct}%`}
+                  subheader={`Composite: ${compPct}% (ML ${mlPct}%, EV ${evPct}%)`}
                 />
                 <CardContent>
-                  <LinearProgress variant="determinate" value={parseFloat(pct)} color={tier.color} sx={{ mb:1, height:8, borderRadius:4 }} />
+                  <LinearProgress variant="determinate" value={parseFloat(compPct)} color={tier.color} sx={{ mb:1, height:8, borderRadius:4 }} />
                   <Typography variant="body2" color="text.secondary">{s.bio}</Typography>
                   <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
                     {(s.tags || []).map((t) => (<Chip key={t} size="small" label={t} />))}

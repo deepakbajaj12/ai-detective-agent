@@ -61,6 +61,15 @@ def init_db():
         cur.execute("ALTER TABLE suspects ADD COLUMN last_scored_at TEXT")
     except Exception:
         pass
+    # New composite scoring columns
+    try:
+        cur.execute("ALTER TABLE suspects ADD COLUMN composite_score REAL")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE suspects ADD COLUMN risk_level TEXT")
+    except Exception:
+        pass
     # Seed suspects if empty
     cur.execute("SELECT COUNT(*) as c FROM suspects")
     if cur.fetchone()["c"] == 0:
@@ -185,6 +194,21 @@ def persist_scores(conn: sqlite3.Connection, score_map: dict[str, float]):
         cur.execute(
             "UPDATE suspects SET last_score=?, last_scored_at=CURRENT_TIMESTAMP WHERE lower(id)=lower(?)",
             (float(score), sid),
+        )
+    conn.commit()
+
+
+def persist_composite_scores(conn: sqlite3.Connection, composite_map: dict[str, float], risk_map: dict[str, str]):
+    """Persist composite (ml + evidence) scores and risk level.
+
+    composite_map: sid -> composite score (0..1)
+    risk_map: sid -> risk level string (High/Medium/Low)
+    """
+    cur = conn.cursor()
+    for sid, cscore in composite_map.items():
+        cur.execute(
+            "UPDATE suspects SET composite_score=?, risk_level=?, updated_at=CURRENT_TIMESTAMP WHERE lower(id)=lower(?)",
+            (float(cscore), risk_map.get(sid, 'unknown'), sid)
         )
     conn.commit()
 

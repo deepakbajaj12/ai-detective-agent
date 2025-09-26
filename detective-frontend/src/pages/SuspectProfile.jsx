@@ -13,6 +13,7 @@ import Slider from '@mui/material/Slider';
 import IconButton from '@mui/material/IconButton';
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import InsightsIcon from '@mui/icons-material/Insights';
 import { apiFetch } from '../apiBase';
 
 export default function SuspectProfile() {
@@ -20,6 +21,8 @@ export default function SuspectProfile() {
   const [suspect, setSuspect] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [explanation, setExplanation] = useState(null);
+  const [explaining, setExplaining] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -63,11 +66,20 @@ export default function SuspectProfile() {
       </Stack>
 
       <Typography variant="body1">{suspect.bio}</Typography>
-      {suspect.last_score !== undefined && (
-        <Typography variant="caption" color="text.secondary">
-          Last Score: {(suspect.last_score*100).toFixed(1)}% {suspect.last_scored_at && ` @ ${suspect.last_scored_at}`}
-        </Typography>
-      )}
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap:'wrap' }}>
+        {suspect.composite_score !== undefined && <Chip size="small" label={`Composite ${(suspect.composite_score*100).toFixed(1)}%`} color="primary" />}
+        {suspect.score !== undefined && <Chip size="small" label={`ML ${(suspect.score*100).toFixed(1)}%`} />}
+        {suspect.evidence_score !== undefined && <Chip size="small" label={`Evidence ${(suspect.evidence_score*100).toFixed(1)}%`} color="secondary" />}
+        {suspect.risk_level && <Chip size="small" label={suspect.risk_level} color={suspect.risk_level==='High'?'error':suspect.risk_level==='Medium'?'warning':'success'} />}
+        {suspect.last_scored_at && <Typography variant="caption" color="text.secondary">@ {suspect.last_scored_at}</Typography>}
+        <Button size="small" startIcon={<InsightsIcon />} disabled={explaining} onClick={()=>{
+          setExplaining(true);
+          apiFetch(`/api/suspects/${sid}/explain`)
+            .then(setExplanation)
+            .catch(()=> setExplanation({ error: 'Failed to load explanation'}))
+            .finally(()=> setExplaining(false));
+        }}>Explain</Button>
+      </Stack>
 
       <Card>
         <CardContent>
@@ -122,6 +134,25 @@ export default function SuspectProfile() {
         </CardContent>
       </Card>
 
+      {explanation && (
+        <Card>
+          <CardContent>
+            <Typography variant="h6">Explanation</Typography>
+            {explanation.error && <Typography color='error' variant='body2'>{explanation.error}</Typography>}
+            {explanation.top_tokens && explanation.top_tokens.length > 0 ? (
+              <Stack spacing={1} sx={{ mt:1 }}>
+                {explanation.top_tokens.map(t => (
+                  <Stack key={t.token} direction='row' spacing={1} alignItems='center'>
+                    <Chip size='small' label={t.token} />
+                    <LinearProgress variant='determinate' value={Math.min(100, (t.weight / explanation.top_tokens[0].weight) * 100)} sx={{ flexGrow:1, height:6, borderRadius:3 }} />
+                    <Typography variant='caption'>{t.weight.toFixed(3)}</Typography>
+                  </Stack>
+                ))}
+              </Stack>
+            ) : (!explanation.error && <Typography variant='body2' color='text.secondary'>No positive contributing tokens.</Typography>)}
+          </CardContent>
+        </Card>
+      )}
       <Button variant="outlined" component={RouterLink} to="/suspects">Back to list</Button>
     </Stack>
   );

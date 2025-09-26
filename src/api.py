@@ -7,7 +7,7 @@ from flask_cors import CORS
 
 from utils import read_clues
 from ml_suspect_model import MODEL_PATH, train_and_save, rank_labels
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores
 
 
 app = Flask(__name__)
@@ -33,24 +33,64 @@ def index():
 
 @app.get("/api/suspects")
 def api_list_suspects():
+    """List suspects including ML score, composite score and risk level.
+
+    Composite score = alpha * ml_score + (1-alpha) * evidence_score
+    evidence_score is normalized sum of evidence weights (capped at 1.0)
+    """
+    alpha_param = request.args.get('alpha')
+    try:
+        alpha = float(alpha_param) if alpha_param is not None else 0.7
+    except ValueError:
+        alpha = 0.7
+    alpha = max(0.0, min(1.0, alpha))
+
     with get_conn() as conn:
         suspects = db_list_suspects(conn)
-        # Aggregate all clues text for scoring
+        # 1. ML scores
         try:
             text = aggregate_clues_text(conn)
             if not Path(MODEL_PATH).exists():
                 train_and_save(BASE_DIR / "inputs" / "sample_training.json")
             ranked = rank_labels([text], top_k=len(suspects) or 3)
-            score_map = {label.lower(): float(score) for label, score in ranked}
+            ml_score_map = {label.lower(): float(score) for label, score in ranked}
         except Exception:
-            score_map = {}
-        enriched = []
+            ml_score_map = {}
+        # 2. Evidence scores per suspect
+        evidence_score_map: dict[str, float] = {}
         for s in suspects:
-            sid = s["id"].lower()
-            s["score"] = score_map.get(sid, 0.0)
-            enriched.append(s)
-        enriched.sort(key=lambda x: x.get("score", 0.0), reverse=True)
-        return jsonify(enriched)
+            evid = list_evidence(conn, s['id'])
+            if evid:
+                total = sum((item.get('weight') or 0.0) for item in evid)
+                # simple normalization: assume 5 strong evidence items max -> cap at 1.0
+                evidence_score_map[s['id'].lower()] = min(1.0, total / 5.0)
+            else:
+                evidence_score_map[s['id'].lower()] = 0.0
+        # 3. Composite
+        composite_map: dict[str, float] = {}
+        risk_map: dict[str, str] = {}
+        for s in suspects:
+            sid = s['id'].lower()
+            ml = ml_score_map.get(sid, 0.0)
+            ev = evidence_score_map.get(sid, 0.0)
+            comp = alpha * ml + (1-alpha) * ev
+            composite_map[sid] = comp
+            if comp >= 0.6:
+                risk_map[sid] = 'High'
+            elif comp >= 0.4:
+                risk_map[sid] = 'Medium'
+            else:
+                risk_map[sid] = 'Low'
+            s['score'] = ml
+            s['evidence_score'] = ev
+            s['composite_score'] = comp
+            s['risk_level'] = risk_map[sid]
+        try:
+            persist_composite_scores(conn, composite_map, risk_map)
+        except Exception:
+            pass
+        suspects.sort(key=lambda x: x.get('composite_score', 0.0), reverse=True)
+        return jsonify(suspects)
 
 
 @app.get("/api/suspects/<sid>")
@@ -66,6 +106,47 @@ def api_suspect_detail(sid: str):
         s["relatedClues"] = related_clues
         s["evidence"] = evidence_items
         return jsonify(s)
+
+
+@app.get('/api/suspects/<sid>/explain')
+def api_explain_suspect(sid: str):
+    """Return top contributing tokens for a suspect label from the linear model.
+    This is a heuristic explanation: shows n-grams with highest positive coefficient.
+    """
+    try:
+        if not Path(MODEL_PATH).exists():
+            train_and_save(BASE_DIR / "inputs" / "sample_training.json")
+        model = rank_labels.__globals__['load_model']()  # reuse existing load function without circular import
+        pipe = model
+        clf = pipe.named_steps['clf']
+        vec = pipe.named_steps['tfidf']
+        classes = list(clf.classes_)
+        target_label = sid
+        if target_label not in classes:
+            # attempt case-insensitive match
+            lowered = {c.lower(): c for c in classes}
+            if target_label.lower() in lowered:
+                target_label = lowered[target_label.lower()]
+            else:
+                return jsonify({"error": "Label not in model"}), 404
+        import numpy as np
+        idx = classes.index(target_label)
+        coefs = clf.coef_[idx]
+        feature_names = vec.get_feature_names_out()
+        order = np.argsort(coefs)[::-1]
+        top_n = []
+        for i in order[:20]:
+            w = float(coefs[i])
+            if w <= 0:
+                break
+            top_n.append({"token": feature_names[i], "weight": w})
+        return jsonify({
+            "label": target_label,
+            "top_tokens": top_n,
+            "total_positive": len([c for c in coefs if c > 0])
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.post("/api/suspects")
