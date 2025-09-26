@@ -46,6 +46,9 @@ outputs/*.pdf
 outputs/*.png
 outputs/*.svg
 outputs/*.html
+data/*.db
+*.sqlite
+*.sqlite3
 
 # Model artifacts
 *.joblib
