@@ -34,6 +34,13 @@ pandas>=2.1
 numpy>=1.26
 
 ##########################
+# Semantic Search (optional dense embeddings)
+##########################
+sentence-transformers>=2.2  # optional; falls back to TF-IDF if not installed
+transformers>=4.40  # for advanced transformer-based suspect classifier (option A)
+torch>=2.2  # CPU version is fine; enables DistilBERT fine-tuning
+
+##########################
 # Optional DB connectors (only if you actually use Postgres/MySQL)
 ##########################
 psycopg2-binary>=2.9 ; platform_system != 'Windows' or platform_machine != 'ARM64'

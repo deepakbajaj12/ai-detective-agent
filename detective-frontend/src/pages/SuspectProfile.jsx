@@ -15,6 +15,17 @@ import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InsightsIcon from '@mui/icons-material/Insights';
 import { apiFetch } from '../apiBase';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import TextField from '@mui/material/TextField';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
 
 export default function SuspectProfile() {
   const { sid } = useParams();
@@ -23,6 +34,10 @@ export default function SuspectProfile() {
   const [error, setError] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [explaining, setExplaining] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [newOffense, setNewOffense] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const [newSeverity, setNewSeverity] = useState('medium');
 
   useEffect(() => {
     setLoading(true);
@@ -51,6 +66,14 @@ export default function SuspectProfile() {
       });
   };
 
+  const refresh = () => {
+    setLoading(true);
+    apiFetch(`/api/suspects/${sid}`)
+      .then(setSuspect)
+      .catch(e => setError(e.message))
+      .finally(()=> setLoading(false));
+  };
+
   if (loading) return <LinearProgress />;
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!suspect) return <Alert severity="warning">Not found</Alert>;
@@ -66,8 +89,32 @@ export default function SuspectProfile() {
       </Stack>
 
       <Typography variant="body1">{suspect.bio}</Typography>
+      <Card>
+        <CardContent>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb:1 }}>
+            <Typography variant="h6">Allegations / Suspected Offenses</Typography>
+            <Button size="small" startIcon={<AddIcon />} onClick={()=> setAddOpen(true)}>Add</Button>
+          </Stack>
+          {suspect.allegations && suspect.allegations.length > 0 ? (
+            <Stack spacing={1}>
+              {suspect.allegations.map(a => (
+                <Stack key={a.id} direction="row" spacing={1} alignItems="center" sx={{ border:'1px solid #bfa46f55', p:1, borderRadius:1 }}>
+                  <Chip size="small" label={a.offense} color={a.severity === 'high' ? 'error' : a.severity === 'medium' ? 'warning' : 'default'} />
+                  <Typography variant="body2" sx={{ flexGrow:1 }}>{a.description}</Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform:'capitalize' }}>{a.severity}</Typography>
+                  <IconButton size="small" onClick={(e)=>{ e.stopPropagation(); apiFetch(`/api/allegations/${a.id}`, { method:'DELETE'}).then(()=> refresh()); }}><DeleteIcon fontSize="small" /></IconButton>
+                </Stack>
+              ))}
+            </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary">No allegations recorded.</Typography>
+          )}
+          <Typography variant="caption" color="text.secondary" sx={{ mt:1, display:'block' }}>Severity impacts composite via additive offense boost. Add high-severity offenses judiciously.</Typography>
+        </CardContent>
+      </Card>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap:'wrap' }}>
-        {suspect.composite_score !== undefined && <Chip size="small" label={`Composite ${(suspect.composite_score*100).toFixed(1)}%`} color="primary" />}
+  {suspect.composite_score !== undefined && <Chip size="small" label={`Composite ${(suspect.composite_score*100).toFixed(1)}%`} color="primary" />}
+  {suspect.offense_boost !== undefined && suspect.offense_boost > 0 && <Chip size="small" variant="outlined" label={`Offense +${(suspect.offense_boost*100).toFixed(1)}%`} color="error" />}
         {suspect.score !== undefined && <Chip size="small" label={`ML ${(suspect.score*100).toFixed(1)}%`} />}
         {suspect.evidence_score !== undefined && <Chip size="small" label={`Evidence ${(suspect.evidence_score*100).toFixed(1)}%`} color="secondary" />}
         {suspect.risk_level && <Chip size="small" label={suspect.risk_level} color={suspect.risk_level==='High'?'error':suspect.risk_level==='Medium'?'warning':'success'} />}
@@ -154,6 +201,39 @@ export default function SuspectProfile() {
         </Card>
       )}
       <Button variant="outlined" component={RouterLink} to="/suspects">Back to list</Button>
+
+      <Dialog open={addOpen} onClose={()=> setAddOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Allegation</DialogTitle>
+        <DialogContent sx={{ pt:1 }}>
+          <Stack spacing={2} sx={{ mt:1 }}>
+            <TextField label="Offense" value={newOffense} onChange={e=> setNewOffense(e.target.value)} fullWidth size="small" />
+            <TextField label="Description" value={newDesc} onChange={e=> setNewDesc(e.target.value)} fullWidth size="small" multiline minRows={2} />
+            <FormControl size="small">
+              <InputLabel id="severity-label">Severity</InputLabel>
+              <Select labelId="severity-label" label="Severity" value={newSeverity} onChange={e=> setNewSeverity(e.target.value)}>
+                <MenuItem value="low">Low</MenuItem>
+                <MenuItem value="medium">Medium</MenuItem>
+                <MenuItem value="high">High</MenuItem>
+              </Select>
+            </FormControl>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={()=> setAddOpen(false)}>Cancel</Button>
+            <Button variant="contained" onClick={()=> {
+              if(!newOffense.trim()) return;
+              apiFetch(`/api/suspects/${sid}/allegations`, {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ offense: newOffense.trim(), description: newDesc.trim(), severity: newSeverity })
+              }).then(()=> {
+                setAddOpen(false);
+                setNewOffense(''); setNewDesc(''); setNewSeverity('medium');
+                refresh();
+              });
+            }}>Save</Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
   );
 }

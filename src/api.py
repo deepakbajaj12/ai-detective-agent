@@ -7,7 +7,10 @@ from flask_cors import CORS
 
 from utils import read_clues
 from ml_suspect_model import MODEL_PATH, train_and_save, rank_labels
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores
+from ml_transformer import ensure_transformer_model, predict_labels as transformer_rank
+from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document
+from gen_ai import generate_case_analysis
 
 
 app = Flask(__name__)
@@ -26,9 +29,33 @@ def index():
         "endpoints": {
             "GET /api/suspects": "List suspects with current ML scores",
             "GET /api/suspects/<id>": "Get detailed suspect profile",
-            "POST /api/predict_suspects": "Rank suspects from provided clues"
+            "POST /api/predict_suspects": "Rank suspects from provided clues",
+            "GET /api/search?q=...": "Semantic/lexical search over clues",
+            "POST /api/analysis": "Generate analytical case summary (AI / heuristic)",
+            "POST /api/documents/upload": "Upload PDF, extract text, auto-suggest suspects",
+            "GET /api/documents": "List ingested documents"
         }
     })
+
+
+@app.get('/api/cases')
+def api_list_cases():
+    with get_conn() as conn:
+        return jsonify(list_cases(conn))
+
+
+@app.post('/api/cases')
+def api_create_case():
+    data = request.get_json(force=True) or {}
+    cid = data.get('id')
+    name = data.get('name')
+    if not cid or not name:
+        return jsonify({'error': 'id and name required'}), 400
+    with get_conn() as conn:
+        if get_case(conn, cid):
+            return jsonify({'error': 'case id exists'}), 409
+        insert_case(conn, cid, name, data.get('description',''))
+        return jsonify({'ok': True}), 201
 
 
 @app.get("/api/suspects")
@@ -39,27 +66,61 @@ def api_list_suspects():
     evidence_score is normalized sum of evidence weights (capped at 1.0)
     """
     alpha_param = request.args.get('alpha')
+    offense_beta_param = request.args.get('offense_beta')
     try:
         alpha = float(alpha_param) if alpha_param is not None else 0.7
     except ValueError:
         alpha = 0.7
     alpha = max(0.0, min(1.0, alpha))
+    try:
+        offense_beta = float(offense_beta_param) if offense_beta_param is not None else 0.1
+    except ValueError:
+        offense_beta = 0.1
+    # keep additive influence restrained
+    offense_beta = max(0.0, min(0.5, offense_beta))
 
+    case_id = request.args.get('case_id') or 'default'
     with get_conn() as conn:
-        suspects = db_list_suspects(conn)
-        # 1. ML scores
+        if case_id and not get_case(conn, case_id):
+            return jsonify({'error': 'case not found'}), 404
+        suspects = db_list_suspects(conn, case_id)
+        # fetch primary offense (highest severity) per suspect
+        for s in suspects:
+            allegations = list_allegations(conn, s['id'], case_id)
+            # order allegations by severity (high > medium > low) then id
+            severity_rank = {'high': 3, 'medium': 2, 'low': 1}
+            allegations.sort(key=lambda a: (-severity_rank.get(a.get('severity','low'),1), a.get('id',0)))
+            s['allegations'] = allegations  # include raw allegations for UI (limited fields acceptable)
+            if allegations:
+                primary = allegations[0]
+                s['primary_offense'] = primary['offense']
+                s['primary_offense_severity'] = primary['severity']
+                s['allegation_count'] = len(allegations)
+        # 1. ML scores (prefer transformer if available)
+        transformer_used = False
         try:
-            text = aggregate_clues_text(conn)
-            if not Path(MODEL_PATH).exists():
-                train_and_save(BASE_DIR / "inputs" / "sample_training.json")
-            ranked = rank_labels([text], top_k=len(suspects) or 3)
-            ml_score_map = {label.lower(): float(score) for label, score in ranked}
+            text = aggregate_clues_text(conn, case_id)
+            # Attempt transformer model
+            try:
+                ensure_transformer_model(BASE_DIR / "inputs" / "sample_training.json")
+                t_ranked = transformer_rank([text], top_k=len(suspects) or 3)
+            except Exception:
+                t_ranked = []
+            if t_ranked:
+                transformer_used = True
+                ml_score_map = {label.lower(): float(score) for label, score in t_ranked}
+            else:
+                if not Path(MODEL_PATH).exists():
+                    train_and_save(BASE_DIR / "inputs" / "sample_training.json")
+                ranked = rank_labels([text], top_k=len(suspects) or 3)
+                ml_score_map = {label.lower(): float(score) for label, score in ranked}
         except Exception:
             ml_score_map = {}
+            transformer_used = False
         # 2. Evidence scores per suspect
         evidence_score_map: dict[str, float] = {}
         for s in suspects:
-            evid = list_evidence(conn, s['id'])
+            evid = list_evidence(conn, s['id'], case_id)
             if evid:
                 total = sum((item.get('weight') or 0.0) for item in evid)
                 # simple normalization: assume 5 strong evidence items max -> cap at 1.0
@@ -69,11 +130,15 @@ def api_list_suspects():
         # 3. Composite
         composite_map: dict[str, float] = {}
         risk_map: dict[str, str] = {}
+        severity_value_map = {'high': 1.0, 'medium': 0.6, 'low': 0.3}
         for s in suspects:
             sid = s['id'].lower()
             ml = ml_score_map.get(sid, 0.0)
             ev = evidence_score_map.get(sid, 0.0)
-            comp = alpha * ml + (1-alpha) * ev
+            base_comp = alpha * ml + (1-alpha) * ev
+            sev = severity_value_map.get(s.get('primary_offense_severity','').lower(), 0.0)
+            offense_boost = offense_beta * sev
+            comp = min(1.0, base_comp + offense_boost)
             composite_map[sid] = comp
             if comp >= 0.6:
                 risk_map[sid] = 'High'
@@ -83,28 +148,39 @@ def api_list_suspects():
                 risk_map[sid] = 'Low'
             s['score'] = ml
             s['evidence_score'] = ev
+            s['composite_base'] = base_comp
+            s['offense_boost'] = offense_boost
             s['composite_score'] = comp
             s['risk_level'] = risk_map[sid]
+        # expose the parameters used so UI can surface them
+        meta = {
+            'alpha': alpha,
+            'offense_beta': offense_beta,
+            'ml_backend': 'transformer' if transformer_used else 'logreg'
+        }
         try:
             persist_composite_scores(conn, composite_map, risk_map)
         except Exception:
             pass
         suspects.sort(key=lambda x: x.get('composite_score', 0.0), reverse=True)
-        return jsonify(suspects)
+        return jsonify({'suspects': suspects, 'meta': meta})
 
 
 @app.get("/api/suspects/<sid>")
 def api_suspect_detail(sid: str):
+    case_id = request.args.get('case_id') or 'default'
     with get_conn() as conn:
         s = db_get_suspect(conn, sid.lower())
         if not s:
             return jsonify({"error": "Not found"}), 404
         # related clues
-        clues = db_list_clues(conn)
+        clues = db_list_clues(conn, case_id=case_id)
         related_clues = [c["text"] for c in clues if s["name"].lower() in c["text"].lower()]
-        evidence_items = list_evidence(conn, s["id"])
+        evidence_items = list_evidence(conn, s["id"], case_id)
+        allegations = list_allegations(conn, s['id'], case_id)
         s["relatedClues"] = related_clues
         s["evidence"] = evidence_items
+        s["allegations"] = allegations
         return jsonify(s)
 
 
@@ -158,7 +234,7 @@ def api_create_suspect():
     with get_conn() as conn:
         if db_get_suspect(conn, data["id"]):
             return jsonify({"error": "id exists"}), 409
-        insert_suspect(conn, data["id"], data["name"], data.get("bio", ''), data.get("avatar", ''), data.get("status", 'unknown'), data.get("tags"))
+        insert_suspect(conn, data["id"], data["name"], data.get("bio", ''), data.get("avatar", ''), data.get("status", 'unknown'), data.get("tags"), data.get('case_id','default'))
         return jsonify({"ok": True}), 201
 
 
@@ -185,8 +261,9 @@ def api_delete_suspect(sid: str):
 def api_list_clues():
     suspect_id = request.args.get("suspect_id")
     limit_param = request.args.get("limit")
+    case_id = request.args.get('case_id') or 'default'
     with get_conn() as conn:
-        rows = db_list_clues(conn, suspect_id)
+        rows = db_list_clues(conn, suspect_id, case_id)
         if limit_param:
             try:
                 lim = int(limit_param)
@@ -203,7 +280,7 @@ def api_add_clue():
     if not text:
         return jsonify({"error": "text required"}), 400
     with get_conn() as conn:
-        insert_clue(conn, text, data.get("suspect_id"))
+        insert_clue(conn, text, data.get("suspect_id"), data.get('case_id','default'))
         return jsonify({"ok": True}), 201
 
 
@@ -216,8 +293,9 @@ def api_delete_clue(clue_id: int):
 
 @app.get("/api/evidence/<sid>")
 def api_list_evidence(sid: str):
+    case_id = request.args.get('case_id') or 'default'
     with get_conn() as conn:
-        return jsonify(list_evidence(conn, sid))
+        return jsonify(list_evidence(conn, sid, case_id))
 
 
 @app.post("/api/evidence/<sid>")
@@ -226,8 +304,40 @@ def api_add_evidence(sid: str):
     with get_conn() as conn:
         if not db_get_suspect(conn, sid):
             return jsonify({"error": "Suspect not found"}), 404
-        insert_evidence(conn, sid, data.get("type", "misc"), data.get("summary", ""), float(data.get("weight", 0)))
-        return jsonify({"ok": True, "evidence": list_evidence(conn, sid)}), 201
+    insert_evidence(conn, sid, data.get("type", "misc"), data.get("summary", ""), float(data.get("weight", 0)), data.get('case_id','default'))
+    return jsonify({"ok": True, "evidence": list_evidence(conn, sid, data.get('case_id','default'))}), 201
+
+
+@app.get('/api/suspects/<sid>/allegations')
+def api_list_allegations(sid: str):
+    case_id = request.args.get('case_id') or 'default'
+    with get_conn() as conn:
+        if not db_get_suspect(conn, sid):
+            return jsonify({'error': 'Suspect not found'}), 404
+        return jsonify(list_allegations(conn, sid, case_id))
+
+
+@app.post('/api/suspects/<sid>/allegations')
+def api_add_allegation(sid: str):
+    data = request.get_json(force=True) or {}
+    offense = data.get('offense')
+    if not offense:
+        return jsonify({'error': 'offense required'}), 400
+    severity = data.get('severity', 'medium')
+    if severity not in {'low','medium','high'}:
+        severity = 'medium'
+    with get_conn() as conn:
+        if not db_get_suspect(conn, sid):
+            return jsonify({'error': 'Suspect not found'}), 404
+        insert_allegation(conn, sid, offense, data.get('description',''), severity, data.get('case_id','default'))
+        return jsonify({'ok': True}), 201
+
+
+@app.delete('/api/allegations/<int:aid>')
+def api_delete_allegation(aid: int):
+    with get_conn() as conn:
+        delete_allegation(conn, aid)
+    return jsonify({'ok': True})
 
 
 @app.patch("/api/evidence/<int:evidence_id>")
@@ -248,10 +358,11 @@ def api_delete_evidence(evidence_id: int):
 @app.post("/api/rescore")
 def api_rescore():
     # Force recomputation of scores and persist timestamp
+    case_id = request.args.get('case_id') or 'default'
     with get_conn() as conn:
-        suspects = db_list_suspects(conn)
+        suspects = db_list_suspects(conn, case_id)
         try:
-            text = aggregate_clues_text(conn)
+            text = aggregate_clues_text(conn, case_id)
             if not Path(MODEL_PATH).exists():
                 train_and_save(BASE_DIR / "inputs" / "sample_training.json")
             ranked = rank_labels([text], top_k=len(suspects) or 3)
@@ -279,6 +390,130 @@ def api_predict_suspects():
         return jsonify([{"label": l, "score": s} for l, s in ranked])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.get('/api/search')
+def api_search():
+    """Semantic (or TF-IDF fallback) search over clues.
+
+    Query Params:
+      q: search string (required)
+      k: top k (default 5)
+      case_id: case scope (default 'default')
+      refresh: if '1' force rebuild index
+    """
+    q = request.args.get('q')
+    if not q:
+        return jsonify({"error": "q required"}), 400
+    try:
+        k = int(request.args.get('k', '5'))
+    except ValueError:
+        k = 5
+    case_id = request.args.get('case_id') or 'default'
+    if request.args.get('refresh') == '1':
+        semantic_refresh(case_id)
+    results = semantic_search(q, k=k, case_id=case_id)
+    return jsonify({
+        "query": q,
+        "k": k,
+        "backend": semantic_backend(),
+        "case_id": case_id,
+        "results": results
+    })
+
+
+@app.post('/api/analysis')
+def api_case_analysis():
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id') or request.args.get('case_id') or 'default'
+    style = data.get('style', 'brief')
+    with get_conn() as conn:
+        if case_id and not get_case(conn, case_id):
+            return jsonify({'error': 'case not found'}), 404
+        suspects = db_list_suspects(conn, case_id)
+        # Reuse clues listing (not aggregating into one string so we can selectively feed)
+        clues_rows = db_list_clues(conn, case_id=case_id)
+        clues = [r['text'] for r in clues_rows]
+    report = generate_case_analysis(case_id, clues, suspects, style=style)
+    return jsonify(report)
+
+
+@app.post('/api/documents/upload')
+def api_upload_document():
+    """Upload a PDF, extract text, store it, and attempt suspect inference.
+
+    Multipart form fields:
+      file: PDF file (required)
+      case_id: optional case id (default 'default')
+      auto_clues: '1' to also create clue entries (splitting by lines)
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'file required'}), 400
+    pdf = request.files['file']
+    if not pdf.filename.lower().endswith('.pdf'):
+        return jsonify({'error': 'only pdf accepted'}), 400
+    case_id = request.form.get('case_id') or 'default'
+    auto_clues = request.form.get('auto_clues') == '1'
+    try:
+        import pdfplumber  # type: ignore
+    except Exception:
+        return jsonify({'error': 'pdfplumber not installed'}), 500
+    from werkzeug.utils import secure_filename
+    safe_name = secure_filename(pdf.filename)
+    tmp_path = BASE_DIR / 'uploads'
+    tmp_path.mkdir(exist_ok=True)
+    local_path = tmp_path / safe_name
+    pdf.save(local_path)
+    # Extract text
+    try:
+        text_parts = []
+        with pdfplumber.open(str(local_path)) as doc:
+            for page in doc.pages:
+                t = page.extract_text() or ''
+                if t.strip():
+                    text_parts.append(t.strip())
+        full_text = '\n'.join(text_parts)
+    except Exception as e:
+        return jsonify({'error': f'failed to parse pdf: {e}'}), 500
+    # Persist document
+    with get_conn() as conn:
+        doc_id = insert_document(conn, filename=str(local_path.name), original_name=pdf.filename, text=full_text, case_id=case_id)
+        # Optionally create clues for each non-empty line (cap to 100 to avoid noise)
+        created_clues = 0
+        if auto_clues:
+            for line in full_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                insert_clue(conn, line[:500], None, case_id)  # no initial suspect mapping
+                created_clues += 1
+                if created_clues >= 100:
+                    break
+        # After ingest, attempt model-driven suspect ranking on the document text
+        try:
+            if not Path(MODEL_PATH).exists():
+                train_and_save(BASE_DIR / 'inputs' / 'sample_training.json')
+            ranked = rank_labels([full_text], top_k=5)
+        except Exception:
+            ranked = []
+    return jsonify({
+        'ok': True,
+        'document_id': doc_id,
+        'filename': safe_name,
+        'chars': len(full_text),
+        'suspect_suggestions': [{'label': l, 'score': s} for l, s in ranked]
+    }), 201
+
+
+@app.get('/api/documents')
+def api_list_documents():
+    case_id = request.args.get('case_id') or 'default'
+    with get_conn() as conn:
+        docs = list_documents(conn, case_id)
+    # Return without full text for listing
+    for d in docs:
+        d.pop('text', None)
+    return jsonify(docs)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,25 @@
+"""Convenience entrypoint so you can run:  python app.py
+
+It ensures the src/ directory is on sys.path then imports the Flask app
+instance from api.py (which lives inside src/). This avoids modifying the
+existing relative imports inside src/api.py.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+SRC_DIR = BASE_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from api import app  # type: ignore  # api.py is in src/ and expects to be executed there.
+
+
+if __name__ == "__main__":
+    # You can change host/port or disable debug here if deploying.
+    app.run(host="0.0.0.0", port=5000, debug=True)
 
 from flask import Flask, render_template_string, request, redirect, url_for
 from src.case_manager import list_cases, add_case, get_clues, add_clue

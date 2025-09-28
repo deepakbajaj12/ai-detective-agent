@@ -50,6 +50,66 @@ body {
   color: #2e2b26;
 }
 
+/* Dark (Night Investigation) mode adjustments */
+body.dark-mode {
+  background:
+    radial-gradient(circle at 25% 30%, rgba(74,81,70,0.25), rgba(0,0,0,0) 70%),
+    radial-gradient(circle at 70% 70%, rgba(62,68,57,0.25), rgba(0,0,0,0) 75%),
+    linear-gradient(115deg,#0f120f,#1b201a 60%, #121512);
+  color: #efe6d2;
+}
+
+/* Hero / banner (optional future use) */
+.hero-band {
+  position: relative;
+  margin: 0 0 2rem 0;
+  padding: 3.2rem 1.6rem 2.8rem 1.6rem;
+  border: 2px solid #bfa46f;
+  border-radius: 18px;
+  background:
+    linear-gradient(140deg, rgba(255,255,255,0.65), rgba(255,255,255,0.25)),
+    repeating-linear-gradient(45deg, rgba(191,164,111,0.08) 0 6px, rgba(0,0,0,0) 6px 12px);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  box-shadow: 0 10px 28px rgba(62,76,58,0.35);
+  overflow: hidden;
+}
+.hero-band:before, .hero-band:after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.hero-band:before {
+  background: radial-gradient(circle at top left, rgba(255,255,255,0.55), transparent 70%);
+}
+.hero-band:after {
+  background: linear-gradient(180deg, rgba(191,164,111,0.35), rgba(191,164,111,0));
+  mix-blend-mode: overlay;
+}
+
+.risk-ribbon {
+  position: absolute;
+  top: 12px;
+  right: -42px;
+  background: linear-gradient(120deg,#8b2f2f,#b04545);
+  color: #fff;
+  padding: 6px 56px;
+  font-family: 'Playfair Display', serif;
+  transform: rotate(35deg);
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+  clip-path: polygon(0 0,100% 0,100% 85%,50% 100%,0 85%);
+}
+.risk-ribbon.medium {
+  background: linear-gradient(120deg,#b87333,#d18f49);
+}
+.risk-ribbon.low {
+  background: linear-gradient(120deg,#2f6f4f,#3f8b62);
+}
+
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-track { background: rgba(0,0,0,0.05); }
 ::-webkit-scrollbar-thumb { background: #bfa46f; border-radius: 6px; }
@@ -76,5 +136,84 @@ body {
   font-family: 'Courier New', monospace;
   background: rgba(255,255,255,0.6);
   border-left: 4px solid #bfa46f;
+}
+
+/* ================= Sherlock 3D Title ================= */
+.sherlock-3d-wrapper {
+  position: relative;
+  display: inline-block;
+  line-height: 0.9;
+  padding: 4px 4px 6px 4px;
+}
+.sherlock-3d-base {
+  position: relative;
+  font-family: 'Playfair Display', serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  background: linear-gradient(140deg,#fdf8eb 0%,#e5d6a8 40%,#c8b17a 65%,#f0e6cf 100%);
+  -webkit-background-clip: text;
+  color: transparent;
+  background-clip: text;
+  text-shadow:
+    0 1px 0 #d4c396,
+    0 2px 0 #c2ad7c,
+    0 3px 0 #b49d63,
+    0 4px 0 #a89255,
+    0 5px 4px rgba(0,0,0,0.25);
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
+  transition: transform 0.4s ease;
+  display: inline-block;
+}
+.sherlock-3d-wrapper:hover .sherlock-3d-base {
+  transform: translateY(-2px);
+}
+.sherlock-3d-layer {
+  position: absolute;
+  top: 0; left: 0;
+  font-family: 'Playfair Display', serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  user-select: none;
+}
+.sherlock-3d-layer.fill {
+  color: #3e4c3a;
+  opacity: 0.15;
+  transform: translate(4px,5px) skewX(-2deg);
+  filter: blur(1px);
+}
+.sherlock-3d-layer.stroke {
+  -webkit-text-stroke: 2px rgba(56, 45, 28, 0.6);
+  color: transparent;
+  transform: translate(1px,1px);
+  mix-blend-mode: multiply;
+}
+.sherlock-3d-layer.shadow {
+  color: rgba(0,0,0,0.25);
+  transform: translate(6px,7px) scale(1.01);
+  filter: blur(2px);
+}
+
+@media (max-width: 600px) {
+  .sherlock-3d-base { font-size: 1.9rem !important; }
+  .sherlock-3d-layer { font-size: 1.9rem !important; }
+}
+
+/* subtle shine animation */
+.sherlock-3d-wrapper:after {
+  content: '';
+  position: absolute;
+  top: 0; left: -30%;
+  width: 30%; height: 100%;
+  background: linear-gradient(70deg, rgba(255,255,255,0.0), rgba(255,255,255,0.55), rgba(255,255,255,0.0));
+  transform: skewX(-20deg);
+  animation: sherlock-shine 6s linear infinite;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+@keyframes sherlock-shine {
+  0% { left: -30%; }
+  55% { left: 130%; }
+  100% { left: 130%; }
 }
 

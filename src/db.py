@@ -21,6 +21,25 @@ def init_db():
     cur = conn.cursor()
     # Tables
     cur.execute(
+        """CREATE TABLE IF NOT EXISTS cases (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    # Uploaded / ingested documents (e.g., PDFs)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT,
+            original_name TEXT,
+            text TEXT,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    cur.execute(
         """CREATE TABLE IF NOT EXISTS suspects (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -28,6 +47,7 @@ def init_db():
             avatar TEXT,
             status TEXT DEFAULT 'unknown',
             tags TEXT,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
@@ -37,6 +57,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             text TEXT NOT NULL,
             suspect_id TEXT REFERENCES suspects(id) ON DELETE SET NULL,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
@@ -47,8 +68,21 @@ def init_db():
             type TEXT,
             summary TEXT,
             weight REAL DEFAULT 0.0,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    # Allegations / suspected offenses (many per suspect)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS allegations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suspect_id TEXT NOT NULL REFERENCES suspects(id) ON DELETE CASCADE,
+            offense TEXT NOT NULL,
+            description TEXT,
+            severity TEXT DEFAULT 'medium', -- low | medium | high
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
     conn.commit()
@@ -61,6 +95,19 @@ def init_db():
         cur.execute("ALTER TABLE suspects ADD COLUMN last_scored_at TEXT")
     except Exception:
         pass
+    # Multi-case columns (if migrating existing DB)
+    try:
+        cur.execute("ALTER TABLE suspects ADD COLUMN case_id TEXT")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE clues ADD COLUMN case_id TEXT")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE evidence ADD COLUMN case_id TEXT")
+    except Exception:
+        pass
     # New composite scoring columns
     try:
         cur.execute("ALTER TABLE suspects ADD COLUMN composite_score REAL")
@@ -70,15 +117,35 @@ def init_db():
         cur.execute("ALTER TABLE suspects ADD COLUMN risk_level TEXT")
     except Exception:
         pass
-    # Seed suspects if empty
+    # Seed default case if none
+    cur.execute("SELECT COUNT(*) as c FROM cases")
+    if cur.fetchone()["c"] == 0:
+        cur.execute("INSERT INTO cases(id,name,description) VALUES (?,?,?)", ("default", "Default Case", "Initial default investigative case"))
+        conn.commit()
+    # Ensure any existing rows get default case_id
+    cur.execute("UPDATE suspects SET case_id='default' WHERE case_id IS NULL")
+    cur.execute("UPDATE clues SET case_id='default' WHERE case_id IS NULL")
+    cur.execute("UPDATE evidence SET case_id='default' WHERE case_id IS NULL")
+    conn.commit()
+    # Seed suspects if empty (into default case)
     cur.execute("SELECT COUNT(*) as c FROM suspects")
     if cur.fetchone()["c"] == 0:
         seed = [
-            ("alice", "Alice", "Neighbor seen near the house. Known for meticulous planning.", "https://ui-avatars.com/api/?name=Alice", "under_watch", "meticulous,planner"),
-            ("bob", "Bob", "Associate mentioned in a note. Possible meeting at 9 PM.", "https://ui-avatars.com/api/?name=Bob", "associate", "meeting,associate"),
-            ("charlie", "Charlie", "Gloves likely used. Vehicle spotted near scene.", "https://ui-avatars.com/api/?name=Charlie", "person_of_interest", "gloves,vehicle"),
+            ("alice", "Alice", "Neighbor seen near the house. Known for meticulous planning.", "https://ui-avatars.com/api/?name=Alice", "under_watch", "meticulous,planner", "default"),
+            ("bob", "Bob", "Associate mentioned in a note. Possible meeting at 9 PM.", "https://ui-avatars.com/api/?name=Bob", "associate", "meeting,associate", "default"),
+            ("charlie", "Charlie", "Gloves likely used. Vehicle spotted near scene.", "https://ui-avatars.com/api/?name=Charlie", "person_of_interest", "gloves,vehicle", "default"),
         ]
-        cur.executemany("INSERT INTO suspects(id,name,bio,avatar,status,tags) VALUES (?,?,?,?,?,?)", seed)
+        cur.executemany("INSERT INTO suspects(id,name,bio,avatar,status,tags,case_id) VALUES (?,?,?,?,?,?,?)", seed)
+        conn.commit()
+        # Seed some example allegations
+        cur.executemany(
+            "INSERT INTO allegations(suspect_id, offense, description, severity, case_id) VALUES (?,?,?,?,?)",
+            [
+                ("alice", "Burglary Planning", "Pattern of surveillance suggesting premeditated break-in", "medium", "default"),
+                ("bob", "Conspiracy", "Referenced in meeting note about target location", "low", "default"),
+                ("charlie", "Property Damage", "Gloves + vehicle near vandalism site", "high", "default"),
+            ]
+        )
         conn.commit()
     conn.close()
 
@@ -92,9 +159,12 @@ def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return d
 
 
-def list_suspects(conn: sqlite3.Connection) -> List[dict]:
+def list_suspects(conn: sqlite3.Connection, case_id: Optional[str] = None) -> List[dict]:
     cur = conn.cursor()
-    cur.execute("SELECT * FROM suspects ORDER BY created_at ASC")
+    if case_id:
+        cur.execute("SELECT * FROM suspects WHERE case_id=? ORDER BY created_at ASC", (case_id,))
+    else:
+        cur.execute("SELECT * FROM suspects ORDER BY created_at ASC")
     return [row_to_dict(r) for r in cur.fetchall()]
 
 
@@ -105,10 +175,10 @@ def get_suspect(conn: sqlite3.Connection, sid: str) -> Optional[dict]:
     return row_to_dict(row) if row else None
 
 
-def insert_suspect(conn: sqlite3.Connection, sid: str, name: str, bio: str = '', avatar: str = '', status: str = 'unknown', tags: Optional[list[str]] = None):
+def insert_suspect(conn: sqlite3.Connection, sid: str, name: str, bio: str = '', avatar: str = '', status: str = 'unknown', tags: Optional[list[str]] = None, case_id: str = 'default'):
     tags_str = ','.join(tags) if tags else None
     cur = conn.cursor()
-    cur.execute("INSERT INTO suspects(id,name,bio,avatar,status,tags) VALUES (?,?,?,?,?,?)", (sid, name, bio, avatar, status, tags_str))
+    cur.execute("INSERT INTO suspects(id,name,bio,avatar,status,tags,case_id) VALUES (?,?,?,?,?,?,?)", (sid, name, bio, avatar, status, tags_str, case_id))
     conn.commit()
 
 
@@ -131,18 +201,22 @@ def delete_suspect(conn: sqlite3.Connection, sid: str):
     conn.commit()
 
 
-def list_clues(conn: sqlite3.Connection, suspect_id: Optional[str] = None) -> List[dict]:
+def list_clues(conn: sqlite3.Connection, suspect_id: Optional[str] = None, case_id: Optional[str] = None) -> List[dict]:
     cur = conn.cursor()
-    if suspect_id:
+    if suspect_id and case_id:
+        cur.execute("SELECT * FROM clues WHERE suspect_id=? AND case_id=? ORDER BY id DESC", (suspect_id, case_id))
+    elif suspect_id:
         cur.execute("SELECT * FROM clues WHERE suspect_id=? ORDER BY id DESC", (suspect_id,))
+    elif case_id:
+        cur.execute("SELECT * FROM clues WHERE case_id=? ORDER BY id DESC", (case_id,))
     else:
         cur.execute("SELECT * FROM clues ORDER BY id DESC")
     return [dict(r) for r in cur.fetchall()]
 
 
-def insert_clue(conn: sqlite3.Connection, text: str, suspect_id: Optional[str] = None):
+def insert_clue(conn: sqlite3.Connection, text: str, suspect_id: Optional[str] = None, case_id: str = 'default'):
     cur = conn.cursor()
-    cur.execute("INSERT INTO clues(text, suspect_id) VALUES (?,?)", (text, suspect_id))
+    cur.execute("INSERT INTO clues(text, suspect_id, case_id) VALUES (?,?,?)", (text, suspect_id, case_id))
     conn.commit()
 
 
@@ -152,15 +226,52 @@ def delete_clue(conn: sqlite3.Connection, clue_id: int):
     conn.commit()
 
 
-def list_evidence(conn: sqlite3.Connection, suspect_id: str) -> List[dict]:
+def list_evidence(conn: sqlite3.Connection, suspect_id: str, case_id: Optional[str] = None) -> List[dict]:
     cur = conn.cursor()
-    cur.execute("SELECT * FROM evidence WHERE suspect_id=? ORDER BY id DESC", (suspect_id,))
+    if case_id:
+        cur.execute("SELECT * FROM evidence WHERE suspect_id=? AND case_id=? ORDER BY id DESC", (suspect_id, case_id))
+    else:
+        cur.execute("SELECT * FROM evidence WHERE suspect_id=? ORDER BY id DESC", (suspect_id,))
     return [dict(r) for r in cur.fetchall()]
 
 
-def insert_evidence(conn: sqlite3.Connection, suspect_id: str, type_: str, summary: str, weight: float = 0.0):
+# ---- Allegations helpers ----
+def list_allegations(conn: sqlite3.Connection, suspect_id: Optional[str] = None, case_id: Optional[str] = None) -> List[dict]:
     cur = conn.cursor()
-    cur.execute("INSERT INTO evidence(suspect_id, type, summary, weight) VALUES (?,?,?,?)", (suspect_id, type_, summary, weight))
+    base = "SELECT * FROM allegations"
+    clauses = []
+    params: list[Any] = []
+    if suspect_id:
+        clauses.append("suspect_id=?")
+        params.append(suspect_id)
+    if case_id:
+        clauses.append("case_id=?")
+        params.append(case_id)
+    if clauses:
+        base += " WHERE " + " AND ".join(clauses)
+    base += " ORDER BY CASE severity WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, id ASC"
+    cur.execute(base, tuple(params))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def insert_allegation(conn: sqlite3.Connection, suspect_id: str, offense: str, description: str = '', severity: str = 'medium', case_id: str = 'default'):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO allegations(suspect_id, offense, description, severity, case_id) VALUES (?,?,?,?,?)",
+        (suspect_id, offense, description, severity, case_id)
+    )
+    conn.commit()
+
+
+def delete_allegation(conn: sqlite3.Connection, allegation_id: int):
+    cur = conn.cursor()
+    cur.execute("DELETE FROM allegations WHERE id=?", (allegation_id,))
+    conn.commit()
+
+
+def insert_evidence(conn: sqlite3.Connection, suspect_id: str, type_: str, summary: str, weight: float = 0.0, case_id: str = 'default'):
+    cur = conn.cursor()
+    cur.execute("INSERT INTO evidence(suspect_id, type, summary, weight, case_id) VALUES (?,?,?,?,?)", (suspect_id, type_, summary, weight, case_id))
     conn.commit()
 
 
@@ -181,11 +292,58 @@ def delete_evidence(conn: sqlite3.Connection, evidence_id: int):
     conn.commit()
 
 
-def aggregate_clues_text(conn: sqlite3.Connection) -> str:
+def aggregate_clues_text(conn: sqlite3.Connection, case_id: Optional[str] = None) -> str:
     cur = conn.cursor()
-    cur.execute("SELECT text FROM clues ORDER BY id ASC")
+    if case_id:
+        cur.execute("SELECT text FROM clues WHERE case_id=? ORDER BY id ASC", (case_id,))
+    else:
+        cur.execute("SELECT text FROM clues ORDER BY id ASC")
     rows = cur.fetchall()
     return ' '.join(r["text"] for r in rows)
+
+
+# ---- Documents helpers ----
+def insert_document(conn: sqlite3.Connection, filename: str, original_name: str, text: str, case_id: str = 'default') -> int:
+    cur = conn.cursor()
+    cur.execute("INSERT INTO documents(filename, original_name, text, case_id) VALUES (?,?,?,?)", (filename, original_name, text, case_id))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def get_document(conn: sqlite3.Connection, doc_id: int) -> Optional[dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM documents WHERE id=?", (doc_id,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def list_documents(conn: sqlite3.Connection, case_id: Optional[str] = None) -> list[dict]:
+    cur = conn.cursor()
+    if case_id:
+        cur.execute("SELECT * FROM documents WHERE case_id=? ORDER BY id DESC", (case_id,))
+    else:
+        cur.execute("SELECT * FROM documents ORDER BY id DESC")
+    return [dict(r) for r in cur.fetchall()]
+
+
+# ---- Cases helpers ----
+def list_cases(conn: sqlite3.Connection) -> List[dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM cases ORDER BY created_at ASC")
+    return [dict(r) for r in cur.fetchall()]
+
+
+def get_case(conn: sqlite3.Connection, case_id: str) -> Optional[dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM cases WHERE id=?", (case_id,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def insert_case(conn: sqlite3.Connection, case_id: str, name: str, description: str = ""):
+    cur = conn.cursor()
+    cur.execute("INSERT INTO cases(id,name,description) VALUES (?,?,?)", (case_id, name, description))
+    conn.commit()
 
 
 def persist_scores(conn: sqlite3.Connection, score_map: dict[str, float]):
