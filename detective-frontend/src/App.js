@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
+import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Container from '@mui/material/Container';
 import './App.css';
@@ -8,14 +8,7 @@ import Header from './components/Header';
 import SuspectList from './pages/SuspectList';
 import SuspectProfile from './pages/SuspectProfile';
 import CluesPage from './pages/CluesPage';
-
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-    primary: { main: '#5e35b1' },
-    secondary: { main: '#26a69a' },
-  },
-});
+import theme from './theme';
 
 function App() {
   return (

@@ -69,7 +69,7 @@ export default function SuspectList() {
           const compPct = ((s.composite_score||s.score||0)*100).toFixed(1);
           return (
             <Grid key={s.id} item xs={12} sm={6} md={4}>
-              <Card component={RouterLink} to={`/suspects/${s.id}`} sx={{ textDecoration: 'none', position:'relative' }}>
+              <Card component={RouterLink} to={`/suspects/${s.id}`} className="case-card" sx={{ textDecoration: 'none', position:'relative', backgroundImage:'url(/paper-fibers.png)', backgroundBlendMode:'multiply' }}>
                 <CardHeader
                   avatar={<Avatar src={s.avatar} alt={s.name} />}
                   title={<Stack direction="row" spacing={1} alignItems="center"><span>{s.name}</span><Chip size="small" label={tier.label} color={tier.color} /></Stack>}

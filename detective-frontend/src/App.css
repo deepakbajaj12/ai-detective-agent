@@ -36,3 +36,40 @@
     transform: rotate(360deg);
   }
 }
+
+body {
+  margin: 0;
+  font-family: 'Merriweather', serif;
+  background: url('/parchment-texture.jpg') repeat;
+  background-size: 600px 600px;
+  color: #2e2b26;
+}
+
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.05); }
+::-webkit-scrollbar-thumb { background: #bfa46f; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #a48842; }
+
+.case-card {
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+.case-card:before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top left, rgba(255,255,255,0.35), transparent 70%);
+  pointer-events: none;
+}
+.case-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 24px rgba(0,0,0,0.25);
+}
+
+.clue-paper {
+  font-family: 'Courier New', monospace;
+  background: rgba(255,255,255,0.6);
+  border-left: 4px solid #bfa46f;
+}
+

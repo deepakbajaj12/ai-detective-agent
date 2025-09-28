@@ -74,7 +74,7 @@ export default function CluesPage() {
       {error && <Alert severity='error'>{error}</Alert>}
       <Stack spacing={1}>
         {filtered.map(c => (
-          <Paper key={c.id} sx={{ p:1, display:'flex', alignItems:'center', gap:1 }}>
+          <Paper key={c.id} className="clue-paper" sx={{ p:1, display:'flex', alignItems:'center', gap:1 }}>
             <Box sx={{ flexGrow:1 }}>
               <Typography variant='body2'>{c.text}</Typography>
               {c.suspect_id && <Chip size='small' label={c.suspect_id} sx={{ mt:0.5 }} />}
