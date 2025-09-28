@@ -40,8 +40,13 @@
 body {
   margin: 0;
   font-family: 'Merriweather', serif;
-  background: url('/parchment-texture.jpg') repeat;
-  background-size: 600px 600px;
+  /* Fallback parchment style using layered gradients instead of external image */
+  background:
+    radial-gradient(circle at 20% 35%, rgba(255,255,255,0.55), rgba(255,255,255,0) 70%),
+    radial-gradient(circle at 80% 65%, rgba(255,255,255,0.45), rgba(255,255,255,0) 70%),
+    repeating-linear-gradient(25deg, #f1e4c6 0 12px, #ecdcb8 12px 24px),
+    linear-gradient(90deg, #f5ecd7, #efe2c5);
+  background-blend-mode: multiply, multiply, normal, normal;
   color: #2e2b26;
 }
 
