@@ -8,6 +8,7 @@ import './App.css';
 import Header from './components/Header';
 import SuspectList from './pages/SuspectList';
 import DocumentIngest from './pages/DocumentIngest';
+import MetricsDashboard from './pages/MetricsDashboard';
 import SuspectProfile from './pages/SuspectProfile';
 import CluesPage from './pages/CluesPage';
 import { buildTheme } from './theme';
@@ -33,6 +34,7 @@ function App() {
               <Route path="/suspects/:sid" element={<SuspectProfile />} />
               <Route path="/clues" element={<CluesPage />} />
               <Route path="/ingest" element={<DocumentIngest />} />
+              <Route path="/metrics" element={<MetricsDashboard />} />
             </Routes>
           </Container>
         </ErrorBoundary>

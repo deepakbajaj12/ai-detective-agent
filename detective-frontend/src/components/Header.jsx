@@ -25,6 +25,7 @@ export default function Header({ mode, onToggleMode }) {
           <Button color="inherit" component={RouterLink} to="/clues">Clues</Button>
           <Button color="inherit" startIcon={<SearchIcon />} component={RouterLink} to="/search">Search</Button>
           <Button color="inherit" component={RouterLink} to="/ingest">Ingest PDF</Button>
+          <Button color="inherit" component={RouterLink} to="/metrics">Metrics</Button>
           <ThemeModeToggle mode={mode} onToggle={onToggleMode} />
         </Stack>
       </Toolbar>

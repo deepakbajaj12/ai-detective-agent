@@ -36,7 +36,8 @@ def index():
             "GET /api/documents": "List ingested documents",
             "POST /api/feedback": "Submit analyst feedback (confirm/reject/uncertain)",
             "GET /api/feedback": "List feedback (latest)",
-            "GET /api/feedback/stats": "Aggregate feedback metrics"
+            "GET /api/feedback/stats": "Aggregate feedback metrics",
+            "GET /api/metrics": "System + model overview metrics"
         }
     })
 
@@ -568,6 +569,116 @@ def api_feedback_stats():
     with get_conn() as conn:
         stats = feedback_stats(conn, case_id)
     return jsonify(stats)
+
+
+@app.get('/api/metrics')
+def api_metrics():
+    """Return high-level system & model metrics for dashboard.
+
+    Includes:
+      - Entity counts
+      - Feedback aggregate stats
+      - Score distribution quantiles
+      - Severity distribution
+      - Evidence weight statistics
+      - Document ingestion stats
+      - Model backend & config defaults
+    """
+    case_id = request.args.get('case_id')  # if provided scope counts to case where applicable
+    with get_conn() as conn:
+        cur = conn.cursor()
+        counts = {}
+        # Count helpers (case-scoped where meaningful)
+        def _count(table: str) -> int:
+            if table in {'suspects','clues','evidence','allegations','documents'} and case_id:
+                cur.execute(f"SELECT COUNT(*) as c FROM {table} WHERE case_id=?", (case_id,))
+            else:
+                cur.execute(f"SELECT COUNT(*) as c FROM {table}")
+            return int(cur.fetchone()['c'])
+        counts['suspects'] = _count('suspects')
+        counts['clues'] = _count('clues')
+        counts['evidence'] = _count('evidence')
+        counts['allegations'] = _count('allegations')
+        counts['documents'] = _count('documents') if 'documents' in counts else _count('documents')
+        counts['cases'] = _count('cases')
+        # Score distribution (composite)
+        if case_id:
+            cur.execute("SELECT composite_score FROM suspects WHERE case_id=? AND composite_score IS NOT NULL", (case_id,))
+        else:
+            cur.execute("SELECT composite_score FROM suspects WHERE composite_score IS NOT NULL")
+        scores = [row['composite_score'] for row in cur.fetchall() if row['composite_score'] is not None]
+        def _quantiles(vals: list[float]):
+            if not vals:
+                return {}
+            import numpy as np
+            arr = np.array(vals)
+            return {
+                'min': float(arr.min()),
+                'p25': float(np.percentile(arr, 25)),
+                'p50': float(np.percentile(arr, 50)),
+                'p75': float(np.percentile(arr, 75)),
+                'max': float(arr.max()),
+                'count': int(arr.size)
+            }
+        score_dist = _quantiles(scores)
+        # Severity distribution
+        if case_id:
+            cur.execute("SELECT severity, COUNT(*) as c FROM allegations WHERE case_id=? GROUP BY severity", (case_id,))
+        else:
+            cur.execute("SELECT severity, COUNT(*) as c FROM allegations GROUP BY severity")
+        sev_rows = cur.fetchall()
+        severity = {r['severity']: r['c'] for r in sev_rows}
+        # Evidence stats
+        if case_id:
+            cur.execute("SELECT AVG(weight) as avg_w, SUM(weight) as sum_w FROM evidence WHERE case_id=?", (case_id,))
+        else:
+            cur.execute("SELECT AVG(weight) as avg_w, SUM(weight) as sum_w FROM evidence")
+        ev_row = cur.fetchone()
+        evidence_stats = {
+            'avg_weight': float(ev_row['avg_w']) if ev_row and ev_row['avg_w'] is not None else None,
+            'total_weight': float(ev_row['sum_w']) if ev_row and ev_row['sum_w'] is not None else 0.0,
+        }
+        # Document ingestion stats
+        if case_id:
+            cur.execute("SELECT COUNT(*) as c, SUM(LENGTH(text)) as total_chars, AVG(LENGTH(text)) as avg_chars FROM documents WHERE case_id=?", (case_id,))
+        else:
+            cur.execute("SELECT COUNT(*) as c, SUM(LENGTH(text)) as total_chars, AVG(LENGTH(text)) as avg_chars FROM documents")
+        drow = cur.fetchone()
+        ingestion = {
+            'documents': int(drow['c']) if drow and drow['c'] is not None else 0,
+            'total_chars': int(drow['total_chars']) if drow and drow['total_chars'] is not None else 0,
+            'avg_chars': float(drow['avg_chars']) if drow and drow['avg_chars'] is not None else None,
+        }
+        # Last scored timestamp
+        if case_id:
+            cur.execute("SELECT MAX(last_scored_at) as latest FROM suspects WHERE case_id=?", (case_id,))
+        else:
+            cur.execute("SELECT MAX(last_scored_at) as latest FROM suspects")
+        ls = cur.fetchone()['latest']
+        # Feedback stats (reuse function)
+        fb = feedback_stats(conn, case_id)
+    # Model backend detection (cheap load attempt)
+    try:
+        from ml_transformer import load_transformer  # type: ignore
+        model, _, _ = load_transformer()
+        backend = 'transformer' if model else 'logreg'
+    except Exception:
+        backend = 'logreg'
+    return jsonify({
+        'counts': counts,
+        'scores': score_dist,
+        'severity': severity,
+        'evidence': evidence_stats,
+        'ingestion': ingestion,
+        'feedback': fb,
+        'model': {
+            'backend': backend,
+            'alpha_default': 0.7,
+            'offense_beta_default': 0.1
+        },
+        'data_freshness': ls,
+        'case_id': case_id or 'ALL'
+    })
 
 
 if __name__ == "__main__":
