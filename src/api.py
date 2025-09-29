@@ -9,7 +9,7 @@ from utils import read_clues
 from ml_suspect_model import MODEL_PATH, train_and_save, rank_labels
 from ml_transformer import ensure_transformer_model, predict_labels as transformer_rank
 from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats
 from gen_ai import generate_case_analysis
 
 
@@ -33,7 +33,10 @@ def index():
             "GET /api/search?q=...": "Semantic/lexical search over clues",
             "POST /api/analysis": "Generate analytical case summary (AI / heuristic)",
             "POST /api/documents/upload": "Upload PDF, extract text, auto-suggest suspects",
-            "GET /api/documents": "List ingested documents"
+            "GET /api/documents": "List ingested documents",
+            "POST /api/feedback": "Submit analyst feedback (confirm/reject/uncertain)",
+            "GET /api/feedback": "List feedback (latest)",
+            "GET /api/feedback/stats": "Aggregate feedback metrics"
         }
     })
 
@@ -514,6 +517,57 @@ def api_list_documents():
     for d in docs:
         d.pop('text', None)
     return jsonify(docs)
+
+
+@app.post('/api/feedback')
+def api_add_feedback():
+    data = request.get_json(force=True) or {}
+    suspect_id = data.get('suspect_id')
+    decision = data.get('decision')
+    if not suspect_id or not decision:
+        return jsonify({'error': 'suspect_id and decision required'}), 400
+    case_id = data.get('case_id') or 'default'
+    with get_conn() as conn:
+        s = db_get_suspect(conn, suspect_id)
+        if not s:
+            return jsonify({'error': 'suspect not found'}), 404
+        try:
+            fid = insert_feedback(
+                conn,
+                suspect_id=suspect_id,
+                decision=decision,
+                rank_at_feedback=data.get('rank_at_feedback'),
+                composite_score=data.get('composite_score'),
+                ml_score=data.get('ml_score'),
+                evidence_score=data.get('evidence_score'),
+                offense_boost=data.get('offense_boost'),
+                case_id=case_id,
+                clue_id=data.get('clue_id')
+            )
+        except ValueError as ve:
+            return jsonify({'error': str(ve)}), 400
+    return jsonify({'ok': True, 'id': fid}), 201
+
+
+@app.get('/api/feedback')
+def api_list_feedback():
+    case_id = request.args.get('case_id')
+    limit = request.args.get('limit', '100')
+    try:
+        lim = int(limit)
+    except ValueError:
+        lim = 100
+    with get_conn() as conn:
+        rows = list_feedback(conn, case_id, lim)
+    return jsonify(rows)
+
+
+@app.get('/api/feedback/stats')
+def api_feedback_stats():
+    case_id = request.args.get('case_id')
+    with get_conn() as conn:
+        stats = feedback_stats(conn, case_id)
+    return jsonify(stats)
 
 
 if __name__ == "__main__":

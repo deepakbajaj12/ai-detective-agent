@@ -28,6 +28,22 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
+    # Analyst feedback on model rankings (human-in-the-loop)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS model_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suspect_id TEXT NOT NULL REFERENCES suspects(id) ON DELETE CASCADE,
+            decision TEXT NOT NULL, -- confirm | reject | uncertain
+            rank_at_feedback INTEGER,
+            composite_score REAL,
+            ml_score REAL,
+            evidence_score REAL,
+            offense_boost REAL,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+            clue_id INTEGER REFERENCES clues(id) ON DELETE SET NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
     # Uploaded / ingested documents (e.g., PDFs)
     cur.execute(
         """CREATE TABLE IF NOT EXISTS documents (
@@ -369,6 +385,57 @@ def persist_composite_scores(conn: sqlite3.Connection, composite_map: dict[str, 
             (float(cscore), risk_map.get(sid, 'unknown'), sid)
         )
     conn.commit()
+
+
+# ---- Feedback helpers ----
+def insert_feedback(conn: sqlite3.Connection, suspect_id: str, decision: str, rank_at_feedback: int | None, composite_score: float | None, ml_score: float | None, evidence_score: float | None, offense_boost: float | None, case_id: str = 'default', clue_id: int | None = None):
+    decision = decision.lower()
+    if decision not in {'confirm','reject','uncertain'}:
+        raise ValueError('invalid decision')
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO model_feedback(suspect_id, decision, rank_at_feedback, composite_score, ml_score, evidence_score, offense_boost, case_id, clue_id)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+        (suspect_id, decision, rank_at_feedback, composite_score, ml_score, evidence_score, offense_boost, case_id, clue_id)
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_feedback(conn: sqlite3.Connection, case_id: str | None = None, limit: int = 100) -> list[dict]:
+    cur = conn.cursor()
+    if case_id:
+        cur.execute("SELECT * FROM model_feedback WHERE case_id=? ORDER BY id DESC LIMIT ?", (case_id, limit))
+    else:
+        cur.execute("SELECT * FROM model_feedback ORDER BY id DESC LIMIT ?", (limit,))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def feedback_stats(conn: sqlite3.Connection, case_id: str | None = None) -> dict:
+    cur = conn.cursor()
+    base = "SELECT decision, COUNT(*) as c FROM model_feedback"
+    params: list[Any] = []
+    if case_id:
+        base += " WHERE case_id=?"
+        params.append(case_id)
+    base += " GROUP BY decision"
+    cur.execute(base, tuple(params))
+    rows = cur.fetchall()
+    counts = {r['decision']: r['c'] for r in rows}
+    total = sum(counts.values()) or 1
+    confirmation_rate = counts.get('confirm', 0) / max(1, (counts.get('confirm',0)+counts.get('reject',0))) if (counts.get('confirm',0)+counts.get('reject',0))>0 else None
+    # Approx precision@1 proxy: proportion of confirmations where rank_at_feedback == 0
+    cur.execute("SELECT COUNT(*) as c FROM model_feedback WHERE decision='confirm'" + (" AND case_id=?" if case_id else ''), (case_id,) if case_id else ())
+    conf_total = cur.fetchone()['c']
+    cur.execute("SELECT COUNT(*) as c FROM model_feedback WHERE decision='confirm' AND rank_at_feedback=0" + (" AND case_id=?" if case_id else ''), (case_id,) if case_id else ())
+    conf_rank1 = cur.fetchone()['c']
+    precision_at_1 = (conf_rank1 / conf_total) if conf_total else None
+    return {
+        'counts': counts,
+        'total': total if total else 0,
+        'confirmation_rate': confirmation_rate,
+        'precision_at_1_proxy': precision_at_1
+    }
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ import Tooltip from '@mui/material/Tooltip';
 import { Link as RouterLink } from 'react-router-dom';
 import AddClueDialog from '../components/AddClueDialog';
 import { apiFetch } from '../apiBase';
+import FeedbackBar from '../components/FeedbackBar';
 
 function scoreTier(score){
   if(score >= 0.6) return {label:'High', color:'error'};
@@ -59,10 +60,17 @@ export default function SuspectList() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [latestClues, setLatestClues] = useState([]);
+  const [fbStats, setFbStats] = useState(null);
   useEffect(()=> {
     apiFetch('/api/clues?limit=5')
       .then(data => setLatestClues(Array.isArray(data)? data: []))
       .catch(()=> setLatestClues([]));
+  }, [suspects]);
+
+  useEffect(()=> {
+    apiFetch('/api/feedback/stats')
+      .then(d => setFbStats(d))
+      .catch(()=> setFbStats(null));
   }, [suspects]);
 
   if (loading) return <LinearProgress />;
@@ -102,12 +110,15 @@ export default function SuspectList() {
                 <Chip size="small" label="Low" />
               </Stack>
               <Chip size="small" label={meta.ml_backend==='transformer' ? 'ML: Transformer' : 'ML: Logistic'} color={meta.ml_backend==='transformer' ? 'success':'default'} />
+              {fbStats && fbStats.total > 0 && (
+                <Chip size="small" variant="outlined" label={`Feedback: ${fbStats.total} (P@1 ${fbStats.precision_at_1_proxy!==null && fbStats.precision_at_1_proxy!==undefined ? (fbStats.precision_at_1_proxy*100).toFixed(0)+'%' : '—'})`} />
+              )}
             </Stack>
           </Stack>
         )}
       </Box>
       <Grid container spacing={2}>
-        {displayed.map((s) => {
+        {displayed.map((s, idx) => {
           const tier = scoreTier(s.composite_score ?? s.score ?? 0);
           const mlPct = ((s.score||0)*100).toFixed(1);
           const evPct = ((s.evidence_score||0)*100).toFixed(1);
@@ -150,6 +161,7 @@ export default function SuspectList() {
                   <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
                     {(s.tags || []).map((t) => (<Chip key={t} size="small" label={t} />))}
                   </Stack>
+                  <FeedbackBar suspect={s} rank={idx} />
                 </CardContent>
               </Card>
             </Grid>
