@@ -9,7 +9,7 @@ from utils import read_clues
 from ml_suspect_model import MODEL_PATH, train_and_save, rank_labels
 from ml_transformer import ensure_transformer_model, predict_labels as transformer_rank
 from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions
 from gen_ai import generate_case_analysis
 
 
@@ -29,6 +29,8 @@ def index():
         "endpoints": {
             "GET /api/suspects": "List suspects with current ML scores",
             "GET /api/suspects/<id>": "Get detailed suspect profile",
+            "GET /api/suspects/<id>/attribution": "Token/clue attribution for a suspect (if generated)",
+            "GET /api/suspects/<id>/risk_explanation": "Structured risk factor narrative",
             "POST /api/predict_suspects": "Rank suspects from provided clues",
             "GET /api/search?q=...": "Semantic/lexical search over clues",
             "POST /api/analysis": "Generate analytical case summary (AI / heuristic)",
@@ -37,9 +39,28 @@ def index():
             "POST /api/feedback": "Submit analyst feedback (confirm/reject/uncertain)",
             "GET /api/feedback": "List feedback (latest)",
             "GET /api/feedback/stats": "Aggregate feedback metrics",
+            "POST /api/simulate": "Ephemeral composite score what-if simulation",
             "GET /api/metrics": "System + model overview metrics"
         }
     })
+
+
+# ---- Helper: lightweight token weighting (heuristic) ----
+def _compute_token_weights(text: str, top_n: int = 10) -> dict[str, float]:
+    import re, math
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9_]+", text)]
+    if not tokens:
+        return {}
+    freq: dict[str, int] = {}
+    for t in tokens:
+        freq[t] = freq.get(t, 0) + 1
+    # tf * log(len/df) but df==frequency here (no corpus) -> simplified weight = freq * log(1+freq)
+    weights = {t: f * math.log(1 + f) for t, f in freq.items()}
+    # normalize
+    max_w = max(weights.values()) if weights else 1.0
+    norm = {t: w / max_w for t, w in weights.items()}
+    # take top_n
+    return dict(sorted(norm.items(), key=lambda x: x[1], reverse=True)[:top_n])
 
 
 @app.get('/api/cases')
@@ -156,6 +177,29 @@ def api_list_suspects():
             s['offense_boost'] = offense_boost
             s['composite_score'] = comp
             s['risk_level'] = risk_map[sid]
+        # Build clue attribution heuristics (optional, only if requested via ?attribution=1)
+        if request.args.get('attribution') == '1':
+            with get_conn() as c2:
+                # clear existing for this case
+                try:
+                    clear_attributions(c2, case_id)
+                except Exception:
+                    pass
+                clues_rows = db_list_clues(c2, case_id=case_id)
+                # For each suspect, weight tokens appearing in each clue
+                for s in suspects:
+                    sid = s['id']
+                    name_tokens = {tok.lower() for tok in s['name'].split()}
+                    for clue in clues_rows:
+                        text = clue['text']
+                        tw = _compute_token_weights(text, top_n=8)
+                        # modest heuristic: amplify tokens matching suspect name tokens
+                        for tok, w in tw.items():
+                            weight = w * (1.5 if tok in name_tokens else 1.0)
+                            try:
+                                insert_attribution(c2, sid, clue['id'], tok, weight, case_id)
+                            except Exception:
+                                pass
         # expose the parameters used so UI can surface them
         meta = {
             'alpha': alpha,
@@ -186,6 +230,29 @@ def api_suspect_detail(sid: str):
         s["evidence"] = evidence_items
         s["allegations"] = allegations
         return jsonify(s)
+
+
+@app.get('/api/suspects/<sid>/attribution')
+def api_suspect_attribution(sid: str):
+    case_id = request.args.get('case_id') or 'default'
+    with get_conn() as conn:
+        if not db_get_suspect(conn, sid):
+            return jsonify({'error': 'suspect not found'}), 404
+        rows = fetch_attributions(conn, sid, case_id)
+        # group by clue_id
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for r in rows:
+            grouped.setdefault(r['clue_id'], []).append({'token': r['token'], 'weight': r['weight']})
+        # fetch clue texts for context
+        clue_map = {c['id']: c['text'] for c in db_list_clues(conn, case_id=case_id)}
+    out = []
+    for cid, toks in grouped.items():
+        out.append({
+            'clue_id': cid,
+            'clue_text': clue_map.get(cid, ''),
+            'tokens': toks
+        })
+    return jsonify({'suspect_id': sid, 'case_id': case_id, 'attribution': out})
 
 
 @app.get('/api/suspects/<sid>/explain')
@@ -569,6 +636,143 @@ def api_feedback_stats():
     with get_conn() as conn:
         stats = feedback_stats(conn, case_id)
     return jsonify(stats)
+
+
+@app.post('/api/simulate')
+def api_simulate():
+    """Ephemeral composite scoring simulation.
+
+    Payload JSON fields:
+      case_id: scope (default 'default')
+      overrides: {
+          evidence_weights: {suspect_id: new_total_weight},
+          remove_offenses: {suspect_id: [offense substrings to remove]},
+          alpha: float (optional override),
+          offense_beta: float (optional override)
+      }
+    Returns: new composite scores + deltas vs current persisted.
+    """
+    data = request.get_json(force=True) or {}
+    case_id = data.get('case_id') or 'default'
+    overrides = data.get('overrides', {}) or {}
+    alpha = float(overrides.get('alpha', 0.7))
+    alpha = max(0.0, min(1.0, alpha))
+    offense_beta = float(overrides.get('offense_beta', 0.1))
+    offense_beta = max(0.0, min(0.5, offense_beta))
+    ev_over = overrides.get('evidence_weights', {}) or {}
+    remove_off = overrides.get('remove_offenses', {}) or {}
+    severity_value_map = {'high': 1.0, 'medium': 0.6, 'low': 0.3}
+    with get_conn() as conn:
+        suspects = db_list_suspects(conn, case_id)
+        original = {s['id'].lower(): s.get('composite_score') for s in suspects}
+        # recompute evidence totals (overridden if provided)
+        evidence_totals: dict[str, float] = {}
+        for s in suspects:
+            sid = s['id'].lower()
+            evid_items = list_evidence(conn, s['id'], case_id)
+            tot = sum((e.get('weight') or 0.0) for e in evid_items)
+            evidence_totals[sid] = float(ev_over.get(sid, tot))
+        # ML scores reused from current endpoint (simple: use persisted last_score or recompute quick)
+        # Use last_score (if available) to avoid heavy recompute
+        ml_scores = {}
+        for s in suspects:
+            ml_scores[s['id'].lower()] = s.get('score') or s.get('last_score') or 0.0
+        results = []
+        for s in suspects:
+            sid = s['id'].lower()
+            ml = ml_scores.get(sid, 0.0)
+            ev_norm = min(1.0, evidence_totals.get(sid, 0.0) / 5.0)
+            # Adjust offenses: remove if substring match requested
+            allegations = list_allegations(conn, s['id'], case_id)
+            removals = [r.lower() for r in remove_off.get(sid, [])]
+            kept = []
+            for a in allegations:
+                if any(rem in a['offense'].lower() for rem in removals):
+                    continue
+                kept.append(a)
+            if kept:
+                severity_sorted = sorted(kept, key=lambda a: {'high':3,'medium':2,'low':1}.get(a.get('severity','low'),1), reverse=True)
+                sev = severity_value_map.get(severity_sorted[0].get('severity','low'), 0.0)
+            else:
+                sev = 0.0
+            offense_boost = offense_beta * sev
+            base_comp = alpha * ml + (1-alpha) * ev_norm
+            comp = min(1.0, base_comp + offense_boost)
+            results.append({
+                'suspect_id': s['id'],
+                'ml_score': ml,
+                'evidence_score': ev_norm,
+                'offense_boost': offense_boost,
+                'composite_base': base_comp,
+                'composite_score': comp,
+                'delta': None if original.get(sid) is None else comp - (original[sid] or 0.0)
+            })
+    results.sort(key=lambda x: x['composite_score'], reverse=True)
+    return jsonify({
+        'case_id': case_id,
+        'alpha': alpha,
+        'offense_beta': offense_beta,
+        'simulated': results
+    })
+
+
+@app.get('/api/suspects/<sid>/risk_explanation')
+def api_risk_explanation(sid: str):
+    """Return structured factors and a narrative explaining risk components."""
+    case_id = request.args.get('case_id') or 'default'
+    with get_conn() as conn:
+        s = db_get_suspect(conn, sid)
+        if not s:
+            return jsonify({'error': 'suspect not found'}), 404
+        # gather evidence + allegations + feedback summary
+        evidence_items = list_evidence(conn, sid, case_id)
+        allegations = list_allegations(conn, sid, case_id)
+        fb = [f for f in list_feedback(conn, case_id, 500) if f['suspect_id']==sid]
+    ev_total = sum((e.get('weight') or 0.0) for e in evidence_items)
+    ev_norm = min(1.0, ev_total / 5.0)
+    severity_value_map = {'high': 1.0, 'medium': 0.6, 'low': 0.3}
+    top_sev = 0.0
+    primary_offense = None
+    if allegations:
+        ordered = sorted(allegations, key=lambda a: {'high':3,'medium':2,'low':1}.get(a.get('severity','low'),1), reverse=True)
+        primary_offense = ordered[0]['offense']
+        top_sev = severity_value_map.get(ordered[0].get('severity','low'), 0.0)
+    confirmations = sum(1 for f in fb if f['decision']=='confirm')
+    rejections = sum(1 for f in fb if f['decision']=='reject')
+    factors = {
+        'evidence_density': ev_norm,
+        'primary_offense': primary_offense,
+        'offense_severity_value': top_sev,
+        'feedback_confirmations': confirmations,
+        'feedback_rejections': rejections,
+        'composite_score': s.get('composite_score')
+    }
+    # Narrative template (no external LLM call to keep deterministic)
+    parts = []
+    score = s.get('composite_score') or 0.0
+    if ev_norm >= 0.6:
+        parts.append(f"Strong evidence accumulation ({ev_norm:.2f} normalized).")
+    elif ev_norm >= 0.3:
+        parts.append(f"Moderate evidence presence ({ev_norm:.2f}).")
+    else:
+        parts.append(f"Sparse direct evidence ({ev_norm:.2f}).")
+    if primary_offense:
+        sev_desc = 'high-severity' if top_sev >= 0.9 else 'notable' if top_sev >= 0.6 else 'lower-severity'
+        parts.append(f"Primary offense '{primary_offense}' is {sev_desc} (sev={top_sev:.2f}).")
+    if confirmations and confirmations > rejections:
+        parts.append(f"Analyst feedback leans confirm ({confirmations} confirm vs {rejections} reject).")
+    elif rejections > confirmations:
+        parts.append(f"Analyst skepticism noted ({rejections} reject vs {confirmations} confirm).")
+    else:
+        parts.append("Limited analyst feedback so far.")
+    if score >= 0.6:
+        parts.append(f"Overall composite score {score:.2f} places this suspect in HIGH risk band.")
+    elif score >= 0.4:
+        parts.append(f"Composite score {score:.2f} indicates MEDIUM risk requiring monitoring.")
+    else:
+        parts.append(f"Composite score {score:.2f} remains LOW; watch for new evidence.")
+    narrative = ' '.join(parts)
+    return jsonify({'suspect_id': sid, 'case_id': case_id, 'factors': factors, 'narrative': narrative})
 
 
 @app.get('/api/metrics')

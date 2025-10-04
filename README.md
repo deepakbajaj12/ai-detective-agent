@@ -19,6 +19,9 @@ _Built for showcasing practical Applied AI / Retrieval / LLM integration to recr
 | Semantic Search | Dense embeddings (SentenceTransformers) with automatic TF‑IDF fallback |
 | Generative Analysis | Structured case narrative via OpenAI / local transformers / heuristic fallback |
 | Explainability | Token coefficient view (linear model) + transparent additive offense boost breakdown |
+| Attribution Overlay | Clue token attribution per suspect (heuristic weights) via `/api/suspects/<id>/attribution` |
+| What-If Simulation | Ephemeral composite recalculation endpoint `/api/simulate` (override evidence/offenses) |
+| Risk Narrative | Structured factor + narrative explanation `/api/suspects/<id>/risk_explanation` |
 | UI/UX | React + MUI, theme toggle, risk ribbons, offense tooltips, dynamic sorting |
 
 ## 🧩 Architecture Overview
@@ -131,6 +134,9 @@ Place / edit training data at `inputs/sample_training.json` (list of {"text","la
 - SHAP explainability for evidence impact
 - PDF ingestion progress + selective clue inclusion UI
 - Docker & CI pipeline (GitHub Actions) with lint/test
+- Token-level gradient / attention based attribution (upgrade heuristic)
+*- Multi-step counterfactual batch scenario comparator*
+*- Calibration & drift monitoring dashboards*
 
 ## ✅ Recruiter Value Proposition
 Demonstrates practical, end-to-end Applied AI system design: ingestion → normalization → hybrid retrieval & ranking → multi-factor scoring fusion → optional LLM reasoning → transparent UI. Emphasizes resilience (tiered fallbacks), explainability, and extensibility.

@@ -101,6 +101,20 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
+    # Token-level clue attribution (per suspect, per clue) captured at scoring time
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS clue_attributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suspect_id TEXT NOT NULL,
+            clue_id INTEGER NOT NULL,
+            token TEXT NOT NULL,
+            weight REAL NOT NULL,
+            case_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(clue_id) REFERENCES clues(id) ON DELETE CASCADE,
+            FOREIGN KEY(suspect_id) REFERENCES suspects(id) ON DELETE CASCADE
+        )"""
+    )
     conn.commit()
     # Attempt to add scoring columns if they don't exist
     try:
@@ -400,6 +414,35 @@ def insert_feedback(conn: sqlite3.Connection, suspect_id: str, decision: str, ra
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+# ---- Attribution helpers ----
+def clear_attributions(conn: sqlite3.Connection, case_id: str, suspect_id: str | None = None):
+    cur = conn.cursor()
+    if suspect_id:
+        cur.execute("DELETE FROM clue_attributions WHERE case_id=? AND lower(suspect_id)=lower(?)", (case_id, suspect_id))
+    else:
+        cur.execute("DELETE FROM clue_attributions WHERE case_id=?", (case_id,))
+    conn.commit()
+
+
+def insert_attribution(conn: sqlite3.Connection, suspect_id: str, clue_id: int, token: str, weight: float, case_id: str):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO clue_attributions(suspect_id, clue_id, token, weight, case_id) VALUES (?,?,?,?,?)",
+        (suspect_id, clue_id, token, float(weight), case_id)
+    )
+    conn.commit()
+
+
+def fetch_attributions(conn: sqlite3.Connection, suspect_id: str, case_id: str) -> list[dict]:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT clue_id, token, weight FROM clue_attributions WHERE lower(suspect_id)=lower(?) AND case_id=? ORDER BY clue_id ASC, weight DESC",
+        (suspect_id, case_id)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    return rows
 
 
 def list_feedback(conn: sqlite3.Connection, case_id: str | None = None, limit: int = 100) -> list[dict]:
