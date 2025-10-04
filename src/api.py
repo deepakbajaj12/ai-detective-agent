@@ -8,6 +8,11 @@ from flask_cors import CORS
 from utils import read_clues
 from ml_suspect_model import MODEL_PATH, train_and_save, rank_labels
 from ml_transformer import ensure_transformer_model, predict_labels as transformer_rank
+try:
+    # optional: only needed for attention-based attribution
+    from ml_transformer import load_transformer  # type: ignore
+except Exception:  # pragma: no cover
+    load_transformer = None  # type: ignore
 from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
 from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions
 from gen_ai import generate_case_analysis
@@ -61,6 +66,43 @@ def _compute_token_weights(text: str, top_n: int = 10) -> dict[str, float]:
     norm = {t: w / max_w for t, w in weights.items()}
     # take top_n
     return dict(sorted(norm.items(), key=lambda x: x[1], reverse=True)[:top_n])
+
+
+# ---- Transformer attention based token attribution (fallback to heuristic) ----
+def _attention_token_weights(text: str, tokenizer, model, top_n: int = 10) -> dict[str, float]:  # pragma: no cover (runtime only)
+    try:
+        import torch  # local import to avoid mandatory dependency if transformer unused
+        enc = tokenizer(text, truncation=True, padding=False, max_length=128, return_tensors='pt')
+        with torch.no_grad():
+            out = model(**enc, output_attentions=True)
+        # DistilBERT: attentions is tuple(layers) each (batch, heads, seq, seq)
+        attn_last = out.attentions[-1].mean(1)  # (batch, seq, seq) averaged over heads
+        cls_to_tokens = attn_last[0, 0, 1:]  # attention from CLS (position 0) to each subsequent token
+        token_ids = enc['input_ids'][0, 1:]  # skip CLS
+        raw_tokens = tokenizer.convert_ids_to_tokens(token_ids)
+        # merge wordpieces
+        merged: dict[str, float] = {}
+        current_word = ''
+        current_score = 0.0
+        for tok, score in zip(raw_tokens, cls_to_tokens.tolist()):
+            if tok.startswith('##'):
+                current_word += tok[2:]
+                current_score += score
+            else:
+                if current_word:
+                    merged[current_word] = max(merged.get(current_word, 0.0), current_score)
+                current_word = tok
+                current_score = score
+        if current_word:
+            merged[current_word] = max(merged.get(current_word, 0.0), current_score)
+        if not merged:
+            return {}
+        # normalize
+        max_w = max(merged.values()) or 1.0
+        norm = {k: v / max_w for k, v in merged.items()}
+        return dict(sorted(norm.items(), key=lambda x: x[1], reverse=True)[:top_n])
+    except Exception:
+        return {}
 
 
 @app.get('/api/cases')
@@ -180,22 +222,31 @@ def api_list_suspects():
         # Build clue attribution heuristics (optional, only if requested via ?attribution=1)
         if request.args.get('attribution') == '1':
             with get_conn() as c2:
-                # clear existing for this case
                 try:
                     clear_attributions(c2, case_id)
                 except Exception:
                     pass
                 clues_rows = db_list_clues(c2, case_id=case_id)
-                # For each suspect, weight tokens appearing in each clue
+                # Attempt transformer attention for richer attribution
+                attn_tokenizer = attn_model = None
+                if load_transformer:
+                    try:
+                        attn_model, attn_tokenizer, _ = load_transformer()  # type: ignore
+                    except Exception:
+                        attn_model = None
                 for s in suspects:
                     sid = s['id']
                     name_tokens = {tok.lower() for tok in s['name'].split()}
                     for clue in clues_rows:
                         text = clue['text']
-                        tw = _compute_token_weights(text, top_n=8)
-                        # modest heuristic: amplify tokens matching suspect name tokens
+                        if attn_model and attn_tokenizer:
+                            tw = _attention_token_weights(text, attn_tokenizer, attn_model, top_n=10)
+                            if not tw:
+                                tw = _compute_token_weights(text, top_n=8)
+                        else:
+                            tw = _compute_token_weights(text, top_n=8)
                         for tok, w in tw.items():
-                            weight = w * (1.5 if tok in name_tokens else 1.0)
+                            weight = w * (1.3 if tok.lower() in name_tokens else 1.0)
                             try:
                                 insert_attribution(c2, sid, clue['id'], tok, weight, case_id)
                             except Exception:

@@ -19,6 +19,8 @@ import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import { Link as RouterLink } from 'react-router-dom';
 import AddClueDialog from '../components/AddClueDialog';
+import AttributionPanel from '../components/AttributionPanel';
+import SimulationPanel from '../components/SimulationPanel';
 import { apiFetch } from '../apiBase';
 import FeedbackBar from '../components/FeedbackBar';
 
@@ -61,6 +63,9 @@ export default function SuspectList() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [latestClues, setLatestClues] = useState([]);
   const [fbStats, setFbStats] = useState(null);
+  const [showAttribution, setShowAttribution] = useState(false);
+  const [attributionData, setAttributionData] = useState(null);
+  const [showSim, setShowSim] = useState(false);
   useEffect(()=> {
     apiFetch('/api/clues?limit=5')
       .then(data => setLatestClues(Array.isArray(data)? data: []))
@@ -72,6 +77,28 @@ export default function SuspectList() {
       .then(d => setFbStats(d))
       .catch(()=> setFbStats(null));
   }, [suspects]);
+
+  // Load attribution lazily when panel opened
+  useEffect(()=> {
+    if(showAttribution){
+      apiFetch('/api/suspects?attribution=1') // refresh & store attribution in DB
+        .then(()=> {
+          // pick top suspect for default detail fetch to warm attribution (optional)
+          if(suspects[0]){
+            apiFetch(`/api/suspects/${suspects[0].id}/attribution`)
+              .then(setAttributionData)
+              .catch(()=> setAttributionData({ attribution: [] }));
+          }
+        });
+    }
+  }, [showAttribution, suspects]);
+
+  const openAttributionFor = (sid) => {
+    setShowAttribution(true);
+    apiFetch(`/api/suspects/${sid}/attribution`)
+      .then(setAttributionData)
+      .catch(()=> setAttributionData({ attribution: [] }));
+  };
 
   if (loading) return <LinearProgress />;
   if (error) return <Alert severity="error">{error}</Alert>;
@@ -104,6 +131,8 @@ export default function SuspectList() {
               <Chip size="small" label="Sort: Composite" color={sortMode==='composite'?'primary':'default'} onClick={()=> setSortMode('composite')} />
               <Chip size="small" label="Sort: Severity" color={sortMode==='severity'?'primary':'default'} onClick={()=> setSortMode('severity')} />
               <Chip size="small" variant="outlined" label="Severity Legend" />
+              <Chip size="small" label="Attribution" color={showAttribution?'secondary':'default'} onClick={()=> setShowAttribution(s => !s)} />
+              <Chip size="small" label="Simulate" color={showSim?'secondary':'default'} onClick={()=> setShowSim(s => !s)} />
               <Stack direction="row" spacing={1} alignItems="center">
                 <Chip size="small" label="High" color="error" />
                 <Chip size="small" label="Medium" color="warning" />
@@ -152,6 +181,7 @@ export default function SuspectList() {
                         />
                       </Tooltip>
                     )}
+                    {showAttribution && <Chip size="small" label="View Attr" variant="outlined" onClick={(e)=> { e.preventDefault(); openAttributionFor(s.id); }} />}
                   </Stack>}
                   subheader={`Composite: ${compPct}% (ML ${mlPct}%, EV ${evPct}%, Offense +${boostPct}%)`}
                 />
@@ -188,6 +218,8 @@ export default function SuspectList() {
         </Fab>
       </Tooltip>
       <AddClueDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
+      <AttributionPanel open={showAttribution} onClose={()=> setShowAttribution(false)} data={attributionData} />
+      <SimulationPanel open={showSim} onClose={()=> setShowSim(false)} suspects={displayed} />
     </Box>
   );
 }
