@@ -14,7 +14,8 @@ try:
 except Exception:  # pragma: no cover
     load_transformer = None  # type: ignore
 from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events
+from graph_builder import build_graph
 from gen_ai import generate_case_analysis
 
 
@@ -45,6 +46,9 @@ def index():
             "GET /api/feedback": "List feedback (latest)",
             "GET /api/feedback/stats": "Aggregate feedback metrics",
             "POST /api/simulate": "Ephemeral composite score what-if simulation",
+            "GET /api/qa": "Hybrid RAG question answering (top chunks + clues)",
+            "GET /api/timeline": "Extracted chronological events",
+            "GET /api/graph": "Relationship graph JSON",
             "GET /api/metrics": "System + model overview metrics"
         }
     })
@@ -600,6 +604,33 @@ def api_upload_document():
     # Persist document
     with get_conn() as conn:
         doc_id = insert_document(conn, filename=str(local_path.name), original_name=pdf.filename, text=full_text, case_id=case_id)
+        # Chunking for RAG: simple paragraph / line chunks ~400 chars
+        chunk_size = 500
+        chunks = []
+        buf = ''
+        for line in full_text.splitlines():
+            if len(buf) + len(line) + 1 <= chunk_size:
+                buf += ('\n' if buf else '') + line
+            else:
+                if buf:
+                    chunks.append(buf.strip())
+                buf = line
+        if buf:
+            chunks.append(buf.strip())
+        # Optional embedding (reuse sentence transformer if available)
+        embed_vectors = []
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+            _emb_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            embed_vectors = _emb_model.encode(chunks, normalize_embeddings=True).tolist()  # type: ignore
+        except Exception:
+            embed_vectors = []
+        for i, ch in enumerate(chunks):
+            emb = embed_vectors[i] if i < len(embed_vectors) else None
+            try:
+                insert_document_chunk(conn, doc_id, case_id, i, ch, emb)
+            except Exception:
+                pass
         # Optionally create clues for each non-empty line (cap to 100 to avoid noise)
         created_clues = 0
         if auto_clues:
@@ -687,6 +718,123 @@ def api_feedback_stats():
     with get_conn() as conn:
         stats = feedback_stats(conn, case_id)
     return jsonify(stats)
+
+
+@app.get('/api/qa')
+def api_qa():
+    """Hybrid RAG QA endpoint.
+
+    Query params:
+      q: question text (required)
+      k: top chunks (default 5)
+      case_id: scope
+    Strategy:
+      1. Embed question -> cosine over stored document_chunks embeddings (if exist)
+      2. Combine with top semantic clue search results
+      3. Compose concise answer heuristic (future: LLM) returning citations.
+    """
+    q = request.args.get('q')
+    if not q:
+        return jsonify({'error': 'q required'}), 400
+    try:
+        k = int(request.args.get('k','5'))
+    except ValueError:
+        k = 5
+    case_id = request.args.get('case_id') or 'default'
+    with get_conn() as conn:
+        chunks = list_chunks(conn, case_id, limit=5000)
+    ranked_chunks = []
+    import math
+    if chunks and any(c.get('embedding') for c in chunks):
+        # embed question
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+            _model_q = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            q_vec = _model_q.encode([q], normalize_embeddings=True)[0]  # type: ignore
+            # cosine
+            def cos(a,b):
+                import numpy as np
+                a=np.array(a); b=np.array(b)
+                return float((a@b)/( (a.dot(a)**0.5)*(b.dot(b)**0.5)+1e-9 ))
+            scored = []
+            for c in chunks:
+                emb = c.get('embedding')
+                if not emb:
+                    continue
+                try:
+                    score = cos(q_vec, emb)
+                except Exception:
+                    score = 0.0
+                scored.append((score, c))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            ranked_chunks = [ {'chunk_id': sc[1]['id'], 'text': sc[1]['text'], 'score': round(sc[0],4)} for sc in scored[:k] ]
+        except Exception:
+            ranked_chunks = []
+    # Clue results
+    clue_hits = semantic_search(q, k=k, case_id=case_id)
+    # Heuristic answer: concatenate top lines containing overlapping keywords
+    key_terms = [w for w in q.split() if len(w) > 3]
+    answer_parts = []
+    for ch in ranked_chunks:
+        if any(t.lower() in ch['text'].lower() for t in key_terms):
+            snippet = ch['text'][:180].replace('\n',' ')
+            answer_parts.append(snippet + ('...' if len(ch['text'])>180 else ''))
+            if len(answer_parts) >= 3:
+                break
+    if not answer_parts:
+        for c in clue_hits:
+            if any(t.lower() in c['text'].lower() for t in key_terms):
+                answer_parts.append(c['text'][:160] + ('...' if len(c['text'])>160 else ''))
+                if len(answer_parts) >= 3:
+                    break
+    answer = ' '.join(answer_parts) if answer_parts else 'Insufficient context to answer definitively.'
+    return jsonify({
+        'question': q,
+        'answer': answer,
+        'chunks': ranked_chunks,
+        'clues': clue_hits,
+        'case_id': case_id
+    })
+
+
+@app.get('/api/timeline')
+def api_timeline():
+    """Return (and if empty, attempt extraction) of timeline events for a case."""
+    case_id = request.args.get('case_id') or 'default'
+    with get_conn() as conn:
+        existing = list_events(conn, case_id)
+        if existing:
+            return jsonify({'case_id': case_id, 'events': existing})
+    # Extract basic dates from clues
+    import re, datetime
+    date_pattern = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b", re.IGNORECASE)
+    with get_conn() as conn:
+        clues_rows = db_list_clues(conn, case_id=case_id)
+        for c in clues_rows:
+            matches = date_pattern.findall(c['text'])
+            for m in matches:
+                norm = None
+                try:
+                    if re.match(r"\d{4}-\d{2}-\d{2}", m):
+                        norm = m + 'T00:00:00'
+                    elif re.match(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", m):
+                        parts = re.split(r"[/-]", m)
+                        if len(parts[-1]) == 2:
+                            parts[-1] = '20'+parts[-1]
+                        mm, dd, yyyy = parts[0], parts[1], parts[2]
+                        norm = f"{yyyy.zfill(4)}-{mm.zfill(2)}-{dd.zfill(2)}T00:00:00"
+                except Exception:
+                    norm = None
+                insert_event(conn, case_id, 'clue', c['id'], c['text'][:160], m, norm, None)
+        events = list_events(conn, case_id)
+    return jsonify({'case_id': case_id, 'events': events})
+
+
+@app.get('/api/graph')
+def api_graph():
+    case_id = request.args.get('case_id') or 'default'
+    graph = build_graph(case_id)
+    return jsonify(graph)
 
 
 @app.post('/api/simulate')

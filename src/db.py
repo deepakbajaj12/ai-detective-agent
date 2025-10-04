@@ -101,6 +101,32 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
+    # Chunked document segments for RAG
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS document_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+            chunk_index INTEGER,
+            text TEXT NOT NULL,
+            embedding TEXT, -- JSON serialized list[float]
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    # Extracted timeline events
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS timeline_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+            suspect_id TEXT REFERENCES suspects(id) ON DELETE SET NULL,
+            source_type TEXT, -- clue|evidence|document
+            source_id INTEGER,
+            event_text TEXT,
+            event_time TEXT, -- original captured string
+            norm_timestamp TEXT, -- ISO normalized (YYYY-MM-DDThh:mm:ss) or date-only
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
     # Token-level clue attribution (per suspect, per clue) captured at scoring time
     cur.execute(
         """CREATE TABLE IF NOT EXISTS clue_attributions (
@@ -443,6 +469,42 @@ def fetch_attributions(conn: sqlite3.Connection, suspect_id: str, case_id: str) 
     )
     rows = [dict(r) for r in cur.fetchall()]
     return rows
+
+# ---- RAG Document Chunks ----
+def insert_document_chunk(conn: sqlite3.Connection, document_id: int, case_id: str, chunk_index: int, text: str, embedding: list[float] | None = None):
+    cur = conn.cursor()
+    emb_str = json.dumps(embedding) if embedding is not None else None
+    cur.execute("INSERT INTO document_chunks(document_id, case_id, chunk_index, text, embedding) VALUES (?,?,?,?,?)", (document_id, case_id, chunk_index, text, emb_str))
+    conn.commit()
+
+
+def list_chunks(conn: sqlite3.Connection, case_id: str, limit: int = 1000) -> list[dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM document_chunks WHERE case_id=? ORDER BY document_id, chunk_index LIMIT ?", (case_id, limit))
+    rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        if r.get('embedding'):
+            try:
+                r['embedding'] = json.loads(r['embedding'])
+            except Exception:
+                r['embedding'] = None
+    return rows
+
+
+# ---- Timeline Events ----
+def insert_event(conn: sqlite3.Connection, case_id: str, source_type: str, source_id: int | None, event_text: str, event_time: str | None, norm_timestamp: str | None, suspect_id: str | None = None):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO timeline_events(case_id, suspect_id, source_type, source_id, event_text, event_time, norm_timestamp) VALUES (?,?,?,?,?,?,?)",
+        (case_id, suspect_id, source_type, source_id, event_text, event_time, norm_timestamp)
+    )
+    conn.commit()
+
+
+def list_events(conn: sqlite3.Connection, case_id: str) -> list[dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM timeline_events WHERE case_id=? ORDER BY norm_timestamp ASC, id ASC", (case_id,))
+    return [dict(r) for r in cur.fetchall()]
 
 
 def list_feedback(conn: sqlite3.Connection, case_id: str | None = None, limit: int = 100) -> list[dict]:
