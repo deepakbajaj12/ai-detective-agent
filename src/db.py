@@ -317,7 +317,7 @@ def list_clues(conn: sqlite3.Connection, suspect_id: Optional[str] = None, case_
     if annotation_label:
         clauses.append("annotation_label=?")
         params.append(annotation_label)
-    base = "SELECT * FROM clues"
+    base = "SELECT *, (SELECT COUNT(*) FROM clues c2 WHERE c2.duplicate_of_id = clues.id) AS duplicate_count FROM clues"
     if clauses:
         base += " WHERE " + " AND ".join(clauses)
     base += " ORDER BY id DESC"

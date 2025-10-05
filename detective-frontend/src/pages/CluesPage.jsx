@@ -21,10 +21,17 @@ import FormControl from '@mui/material/FormControl';
 import InputLabel from '@mui/material/InputLabel';
 import DoneIcon from '@mui/icons-material/Done';
 import HelpIcon from '@mui/icons-material/Help';
-import Box from '@mui/material/Box';
 import Collapse from '@mui/material/Collapse';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import Drawer from '@mui/material/Drawer';
+import Checkbox from '@mui/material/Checkbox';
+import FormGroup from '@mui/material/FormGroup';
+import List from '@mui/material/List';
+import ListItem from '@mui/material/ListItem';
+import ListItemText from '@mui/material/ListItemText';
+import Divider from '@mui/material/Divider';
+import Box from '@mui/material/Box';
 
 export default function CluesPage() {
   const [clues, setClues] = useState([]);
@@ -37,6 +44,11 @@ export default function CluesPage() {
   const [annotationFilter, setAnnotationFilter] = useState('');
   const [recomputing, setRecomputing] = useState(false);
   const [expandedDuplicates, setExpandedDuplicates] = useState({}); // clueId -> {loading, list}
+  const [onlyCanonical, setOnlyCanonical] = useState(false);
+  const [duplicatePanelOpen, setDuplicatePanelOpen] = useState(false);
+  const [bulkSelection, setBulkSelection] = useState({}); // id -> true
+  const [bulkCanonical, setBulkCanonical] = useState(null); // chosen canonical id
+  const [bulkActionBusy, setBulkActionBusy] = useState(false);
 
   const qualityLabel = (v) => `${(v*100).toFixed(0)}%`;
 
@@ -108,6 +120,7 @@ export default function CluesPage() {
   const filtered = clues.filter(c => {
     if(search && !c.text.toLowerCase().includes(search.toLowerCase())) return false;
     if(suspectFilter && c.suspect_id !== suspectFilter) return false;
+    if(onlyCanonical && c.duplicate_of_id) return false;
     return true;
   });
 
@@ -134,6 +147,7 @@ export default function CluesPage() {
             {suspectsFromClues.map(s => <option key={s} value={s}>{s}</option>)}
           </TextField>
           <FormControlLabel control={<Switch checked={hideDuplicates} onChange={e=>setHideDuplicates(e.target.checked)} />} label="Hide duplicates" />
+          <FormControlLabel control={<Switch checked={onlyCanonical} onChange={e=>setOnlyCanonical(e.target.checked)} />} label="Only canonical" />
         </Stack>
         <Stack direction={{xs:'column', sm:'row'}} spacing={2} alignItems={{xs:'stretch', sm:'center'}}>
           <Box sx={{ flexGrow:1 }}>
@@ -151,6 +165,7 @@ export default function CluesPage() {
           </FormControl>
           <Button size='small' variant='outlined' onClick={triggerRecomputeDuplicates} disabled={recomputing}>{recomputing? 'Recomputing...' : 'Recompute Duplicates'}</Button>
           <Button size='small' variant='outlined' onClick={triggerRecomputeQuality} disabled={recomputing}>{recomputing? 'Recomputing...' : 'Recompute Quality'}</Button>
+          <Button size='small' variant='contained' color='secondary' onClick={()=>setDuplicatePanelOpen(true)}>Duplicate Panel</Button>
         </Stack>
       </Stack>
       {loading && <LinearProgress />}
@@ -162,14 +177,23 @@ export default function CluesPage() {
           const isCanonical = !dup;
           const expanded = expandedDuplicates[c.id];
           const subduedStyle = dup ? { opacity:0.55, backgroundColor:(theme)=> theme.palette.mode==='dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)' } : {};
+          const checked = !!bulkSelection[c.id];
           return (
-            <Paper key={c.id} className="clue-paper" sx={{ p:1, display:'flex', flexDirection:'column', gap:0.5, ...subduedStyle }}>
+            <Paper key={c.id} className="clue-paper" sx={{ p:1, display:'flex', flexDirection:'column', gap:0.5, position:'relative', ...subduedStyle }}>
               <Stack direction='row' spacing={1} alignItems='flex-start'>
                 <Box sx={{ flexGrow:1 }}>
                   <Stack direction='row' spacing={0.5} alignItems='center'>
                     {isCanonical && <IconButton size='small' onClick={()=>toggleDuplicates(c)} sx={{ transform: expanded? 'rotate(90deg)':'none', transition:'0.2s' }}>
                       {expanded ? <ExpandLessIcon fontSize='inherit' /> : <ExpandMoreIcon fontSize='inherit' />}
                     </IconButton>}
+                    <Checkbox size='small' checked={checked} onChange={(e)=>{
+                      const val = e.target.checked;
+                      setBulkSelection(prev => {
+                        const next = { ...prev };
+                        if(val) next[c.id]=true; else delete next[c.id];
+                        return next;
+                      });
+                    }} />
                     <Typography variant='body2' sx={{ whiteSpace:'pre-wrap', flexGrow:1 }}>{c.text}</Typography>
                   </Stack>
                   <Stack direction='row' spacing={1} sx={{ mt:0.5, flexWrap:'wrap' }}>
@@ -178,6 +202,7 @@ export default function CluesPage() {
                     {quality != null && <Chip size='small' label={`Q ${(quality*100).toFixed(0)}%`} />}
                     {c.annotation_label && <Chip size='small' color={c.annotation_label==='relevant'?'success': c.annotation_label==='irrelevant'?'default':'info'} label={c.annotation_label} />}
                     {c.source_type && <Chip size='small' variant='outlined' label={c.source_type} />}
+                    {isCanonical && c.duplicate_count > 0 && <Chip size='small' color='primary' variant='outlined' label={`Dupes ${c.duplicate_count}`} />}
                   </Stack>
                 </Box>
                 <Stack direction='row' spacing={0.5}>
@@ -206,6 +231,47 @@ export default function CluesPage() {
         })}
         {(!loading && filtered.length === 0) && <Typography variant='body2' color='text.secondary'>No clues match filters.</Typography>}
       </Stack>
+      <Drawer anchor='right' open={duplicatePanelOpen} onClose={()=>setDuplicatePanelOpen(false)} sx={{ '& .MuiDrawer-paper': { width: 360, p:2 }}}>
+        <Stack spacing={2} sx={{ height:'100%' }}>
+          <Typography variant='h6'>Duplicate Resolution</Typography>
+          <Typography variant='body2' color='text.secondary'>Select a canonical clue (radio via Set Canonical) then merge or delete others. Merge deletes selected duplicates that point to the chosen canonical.</Typography>
+          <Divider />
+          <Box sx={{ flexGrow:1, overflow:'auto' }}>
+            <List dense>
+              {filtered.filter(c=> !c.duplicate_of_id).map(c => {
+                const isCanonChoice = bulkCanonical === c.id;
+                return (
+                  <ListItem key={c.id} alignItems='flex-start' disableGutters secondaryAction={
+                    <Button size='small' variant={isCanonChoice? 'contained':'outlined'} onClick={()=>setBulkCanonical(c.id)}>Set Canonical</Button>
+                  }>
+                    <ListItemText primary={`#${c.id} ${(c.text||'').slice(0,50)}`} secondary={`Dupes: ${c.duplicate_count || 0}`} />
+                  </ListItem>
+                );
+              })}
+            </List>
+          </Box>
+          <FormGroup>
+            <Typography variant='caption'>Selected: {Object.keys(bulkSelection).length}  Canonical: {bulkCanonical || 'None'}</Typography>
+          </FormGroup>
+          <Stack direction='row' spacing={1}>
+            <Button disabled={!bulkCanonical || Object.keys(bulkSelection).length === 0 || bulkActionBusy} size='small' variant='contained' onClick={()=>{
+              setBulkActionBusy(true);
+              const duplicate_ids = Object.keys(bulkSelection).map(Number).filter(id => id !== bulkCanonical);
+              apiFetch('/api/clues/duplicates/merge', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ canonical_id: bulkCanonical, duplicate_ids }) })
+                .then(()=> { setBulkSelection({}); load(); })
+                .finally(()=> setBulkActionBusy(false));
+            }}>Merge (Delete Duplicates)</Button>
+            <Button disabled={Object.keys(bulkSelection).length === 0 || bulkActionBusy} size='small' color='error' variant='outlined' onClick={()=>{
+              setBulkActionBusy(true);
+              const ids = Object.keys(bulkSelection).map(Number).filter(id => id !== bulkCanonical);
+              apiFetch('/api/clues/duplicates/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ids }) })
+                .then(()=> { setBulkSelection({}); load(); })
+                .finally(()=> setBulkActionBusy(false));
+            }}>Delete Selected</Button>
+            <Button size='small' variant='text' onClick={()=>{ setBulkSelection({}); setBulkCanonical(null); }}>Clear</Button>
+          </Stack>
+        </Stack>
+      </Drawer>
     </Stack>
   );
 }

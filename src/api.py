@@ -512,6 +512,54 @@ def api_list_clue_duplicates(clue_id: int):
     return jsonify({'clue_id': clue_id, 'duplicates': rows, 'count': len(rows)})
 
 
+@app.post('/api/clues/duplicates/merge')
+@auth_required
+def api_merge_duplicates():
+    data = request.get_json(force=True) or {}
+    canonical_id = data.get('canonical_id')
+    duplicate_ids = data.get('duplicate_ids') or []
+    if not canonical_id or not isinstance(duplicate_ids, list) or not duplicate_ids:
+        return jsonify({'error': 'canonical_id and duplicate_ids required'}), 400
+    with get_conn() as conn:
+        cur = conn.cursor()
+        # ensure canonical exists
+        cur.execute("SELECT id FROM clues WHERE id=?", (canonical_id,))
+        if not cur.fetchone():
+            return jsonify({'error': 'canonical clue not found'}), 404
+        # re-point duplicates: strategy = delete duplicates (optionally could keep and mark)
+        deleted = 0
+        for did in duplicate_ids:
+            try:
+                cur.execute("DELETE FROM clues WHERE id=? AND duplicate_of_id=?", (did, canonical_id))
+                if cur.rowcount:
+                    deleted += 1
+            except Exception:
+                pass
+        conn.commit()
+    return jsonify({'ok': True, 'deleted_duplicates': deleted, 'canonical_id': canonical_id})
+
+
+@app.post('/api/clues/duplicates/delete')
+@auth_required
+def api_delete_duplicates():
+    data = request.get_json(force=True) or {}
+    ids = data.get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'ids list required'}), 400
+    with get_conn() as conn:
+        cur = conn.cursor()
+        deleted = 0
+        for cid in ids:
+            try:
+                cur.execute("DELETE FROM clues WHERE id=?", (cid,))
+                if cur.rowcount:
+                    deleted += 1
+            except Exception:
+                pass
+        conn.commit()
+    return jsonify({'ok': True, 'deleted': deleted})
+
+
 @app.post('/api/clues/<int:clue_id>/annotate')
 @auth_required
 def api_annotate_clue(clue_id: int):
