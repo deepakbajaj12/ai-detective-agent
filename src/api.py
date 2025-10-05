@@ -491,6 +491,27 @@ def api_delete_clue(clue_id: int):
         return jsonify({"ok": True})
 
 
+@app.get('/api/clues/<int:clue_id>/duplicates')
+def api_list_clue_duplicates(clue_id: int):
+    """List duplicates referencing this clue (duplicate_of_id = clue_id)."""
+    case_id = request.args.get('case_id')  # optional narrowing
+    with get_conn() as conn:
+        # Confirm clue exists
+        cur = conn.cursor()
+        if case_id:
+            cur.execute("SELECT id FROM clues WHERE id=? AND case_id=?", (clue_id, case_id))
+        else:
+            cur.execute("SELECT id FROM clues WHERE id=?", (clue_id,))
+        if not cur.fetchone():
+            return jsonify({'error': 'clue not found'}), 404
+        if case_id:
+            cur.execute("SELECT * FROM clues WHERE duplicate_of_id=? AND case_id=? ORDER BY id ASC", (clue_id, case_id))
+        else:
+            cur.execute("SELECT * FROM clues WHERE duplicate_of_id=? ORDER BY id ASC", (clue_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+    return jsonify({'clue_id': clue_id, 'duplicates': rows, 'count': len(rows)})
+
+
 @app.post('/api/clues/<int:clue_id>/annotate')
 @auth_required
 def api_annotate_clue(clue_id: int):

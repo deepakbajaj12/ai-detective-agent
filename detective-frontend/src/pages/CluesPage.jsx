@@ -22,6 +22,9 @@ import InputLabel from '@mui/material/InputLabel';
 import DoneIcon from '@mui/icons-material/Done';
 import HelpIcon from '@mui/icons-material/Help';
 import Box from '@mui/material/Box';
+import Collapse from '@mui/material/Collapse';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 
 export default function CluesPage() {
   const [clues, setClues] = useState([]);
@@ -33,6 +36,7 @@ export default function CluesPage() {
   const [minQuality, setMinQuality] = useState(0);
   const [annotationFilter, setAnnotationFilter] = useState('');
   const [recomputing, setRecomputing] = useState(false);
+  const [expandedDuplicates, setExpandedDuplicates] = useState({}); // clueId -> {loading, list}
 
   const qualityLabel = (v) => `${(v*100).toFixed(0)}%`;
 
@@ -80,6 +84,25 @@ export default function CluesPage() {
     apiFetch('/api/clues/recompute_quality', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({}) })
       .then(()=> load())
       .finally(()=> setRecomputing(false));
+  };
+
+  const toggleDuplicates = (clue) => {
+    if (expandedDuplicates[clue.id]) {
+      // collapse
+      setExpandedDuplicates(prev => {
+        const cp = { ...prev };
+        delete cp[clue.id];
+        return cp;
+      });
+      return;
+    }
+    // load duplicates for canonical clue (only if it has duplicates pointing to it)
+    const isCanonical = !clue.duplicate_of_id;
+    if (!isCanonical) return; // only canonical expandable
+    setExpandedDuplicates(prev => ({ ...prev, [clue.id]: { loading: true, list: [] }}));
+    apiFetch(`/api/clues/${clue.id}/duplicates`)
+      .then(data => setExpandedDuplicates(prev => ({ ...prev, [clue.id]: { loading:false, list: data.duplicates || [] }})))
+      .catch(()=> setExpandedDuplicates(prev => ({ ...prev, [clue.id]: { loading:false, list: [] }})));
   };
 
   const filtered = clues.filter(c => {
@@ -136,11 +159,19 @@ export default function CluesPage() {
         {filtered.map(c => {
           const dup = c.duplicate_of_id;
           const quality = c.clue_quality;
+          const isCanonical = !dup;
+          const expanded = expandedDuplicates[c.id];
+          const subduedStyle = dup ? { opacity:0.55, backgroundColor:(theme)=> theme.palette.mode==='dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)' } : {};
           return (
-            <Paper key={c.id} className="clue-paper" sx={{ p:1, display:'flex', flexDirection:'column', gap:0.5 }}>
+            <Paper key={c.id} className="clue-paper" sx={{ p:1, display:'flex', flexDirection:'column', gap:0.5, ...subduedStyle }}>
               <Stack direction='row' spacing={1} alignItems='flex-start'>
                 <Box sx={{ flexGrow:1 }}>
-                  <Typography variant='body2' sx={{ whiteSpace:'pre-wrap' }}>{c.text}</Typography>
+                  <Stack direction='row' spacing={0.5} alignItems='center'>
+                    {isCanonical && <IconButton size='small' onClick={()=>toggleDuplicates(c)} sx={{ transform: expanded? 'rotate(90deg)':'none', transition:'0.2s' }}>
+                      {expanded ? <ExpandLessIcon fontSize='inherit' /> : <ExpandMoreIcon fontSize='inherit' />}
+                    </IconButton>}
+                    <Typography variant='body2' sx={{ whiteSpace:'pre-wrap', flexGrow:1 }}>{c.text}</Typography>
+                  </Stack>
                   <Stack direction='row' spacing={1} sx={{ mt:0.5, flexWrap:'wrap' }}>
                     {c.suspect_id && <Chip size='small' label={c.suspect_id} />}
                     {dup && <Tooltip title={`Duplicate of #${dup} (sim=${c.similarity})`}><Chip size='small' color='warning' label='Duplicate' /></Tooltip>}
@@ -156,6 +187,20 @@ export default function CluesPage() {
                   <IconButton onClick={()=>handleDelete(c.id)} size='small' color='error'><DeleteIcon fontSize='small' /></IconButton>
                 </Stack>
               </Stack>
+              {isCanonical && expanded && (
+                <Collapse in={true} timeout='auto' unmountOnExit>
+                  <Stack spacing={0.5} sx={{ pl:4, pt:1 }}>
+                    {expanded.loading && <Typography variant='caption' color='text.secondary'>Loading duplicates...</Typography>}
+                    {!expanded.loading && expanded.list.length === 0 && <Typography variant='caption' color='text.secondary'>No duplicates recorded.</Typography>}
+                    {expanded.list.map(d => (
+                      <Paper key={d.id} variant='outlined' sx={{ p:0.5, opacity:0.65 }}>
+                        <Typography variant='caption' sx={{ display:'block' }}>#{d.id} sim={d.similarity ?? '?'} Q {d.clue_quality != null ? (d.clue_quality*100).toFixed(0)+'%' : 'n/a'}</Typography>
+                        <Typography variant='body2' sx={{ whiteSpace:'pre-wrap' }}>{d.text}</Typography>
+                      </Paper>
+                    ))}
+                  </Stack>
+                </Collapse>
+              )}
             </Paper>
           );
         })}
