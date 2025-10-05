@@ -3,7 +3,14 @@ const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000';
 export async function apiFetch(path, options = {}) {
   const url = `${API_BASE}${path}`;
   try {
-    const res = await fetch(url, options);
+    const headers = new Headers(options.headers || {});
+    // Inject bearer token if present
+    const token = localStorage.getItem('auth_token');
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    const finalOpts = { ...options, headers };
+    const res = await fetch(url, finalOpts);
     if (!res.ok) {
       const text = await res.text().catch(()=> '');
       throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);

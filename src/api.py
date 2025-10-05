@@ -14,7 +14,7 @@ try:
 except Exception:  # pragma: no cover
     load_transformer = None  # type: ignore
 from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality
 from graph_builder import build_graph
 from gen_ai import generate_case_analysis
 
@@ -49,9 +49,69 @@ def index():
             "GET /api/qa": "Hybrid RAG question answering (top chunks + clues)",
             "GET /api/timeline": "Extracted chronological events",
             "GET /api/graph": "Relationship graph JSON",
+            "POST /api/auth/register": "Create a new user (initial open mode)",
+            "POST /api/auth/login": "Get an API token",
             "GET /api/metrics": "System + model overview metrics"
         }
     })
+
+
+# ---- Auth Utilities ----
+import hashlib, secrets
+from functools import wraps
+
+def _hash_password(pw: str) -> str:
+    return hashlib.sha256(pw.encode('utf-8')).hexdigest()
+
+
+def auth_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        if token and token.lower().startswith('bearer '):
+            token = token.split(None,1)[1]
+        if not token:
+            return jsonify({'error': 'auth required'}), 401
+        with get_conn() as conn:
+            user = get_user_by_token(conn, token)
+        if not user:
+            return jsonify({'error': 'invalid token'}), 401
+        request.user = user  # type: ignore
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+@app.post('/api/auth/register')
+def api_register():
+    data = request.get_json(force=True) or {}
+    username = data.get('username','').strip().lower()
+    password = data.get('password','')
+    if not username or not password:
+        return jsonify({'error': 'username and password required'}), 400
+    with get_conn() as conn:
+        if find_user(conn, username):
+            return jsonify({'error': 'username exists'}), 409
+        uid = create_user(conn, username, _hash_password(password), role='user')
+        tok = secrets.token_hex(16)
+        create_token(conn, uid, tok)
+    return jsonify({'ok': True, 'token': tok})
+
+
+@app.post('/api/auth/login')
+def api_login():
+    data = request.get_json(force=True) or {}
+    username = data.get('username','').strip().lower()
+    password = data.get('password','')
+    if not username or not password:
+        return jsonify({'error': 'username and password required'}), 400
+    with get_conn() as conn:
+        user = find_user(conn, username)
+        if not user or user['password_hash'] != _hash_password(password):
+            return jsonify({'error': 'invalid credentials'}), 401
+        # issue new token each login (simplest strategy)
+        tok = secrets.token_hex(16)
+        create_token(conn, user['id'], tok)
+    return jsonify({'ok': True, 'token': tok})
 
 
 # ---- Helper: lightweight token weighting (heuristic) ----
@@ -116,6 +176,7 @@ def api_list_cases():
 
 
 @app.post('/api/cases')
+@auth_required
 def api_create_case():
     data = request.get_json(force=True) or {}
     cid = data.get('id')
@@ -352,6 +413,7 @@ def api_explain_suspect(sid: str):
 
 
 @app.post("/api/suspects")
+@auth_required
 def api_create_suspect():
     data = request.get_json(force=True)
     required = ["id", "name"]
@@ -365,6 +427,7 @@ def api_create_suspect():
 
 
 @app.patch("/api/suspects/<sid>")
+@auth_required
 def api_update_suspect(sid: str):
     data = request.get_json(force=True) or {}
     with get_conn() as conn:
@@ -375,6 +438,7 @@ def api_update_suspect(sid: str):
 
 
 @app.delete("/api/suspects/<sid>")
+@auth_required
 def api_delete_suspect(sid: str):
     with get_conn() as conn:
         if not db_get_suspect(conn, sid):
@@ -388,8 +452,15 @@ def api_list_clues():
     suspect_id = request.args.get("suspect_id")
     limit_param = request.args.get("limit")
     case_id = request.args.get('case_id') or 'default'
+    hide_duplicates = request.args.get('hide_duplicates') == '1'
+    min_quality = request.args.get('min_quality')
+    annotation_label = request.args.get('annotation_label')
+    try:
+        min_q_val = float(min_quality) if min_quality is not None else None
+    except ValueError:
+        min_q_val = None
     with get_conn() as conn:
-        rows = db_list_clues(conn, suspect_id, case_id)
+        rows = db_list_clues(conn, suspect_id, case_id, hide_duplicates=hide_duplicates, min_quality=min_q_val, annotation_label=annotation_label)
         if limit_param:
             try:
                 lim = int(limit_param)
@@ -400,21 +471,67 @@ def api_list_clues():
 
 
 @app.post("/api/clues")
+@auth_required
 def api_add_clue():
     data = request.get_json(force=True)
     text = data.get("text")
     if not text:
         return jsonify({"error": "text required"}), 400
+    source_type = data.get('source_type') or 'manual'
     with get_conn() as conn:
-        insert_clue(conn, text, data.get("suspect_id"), data.get('case_id','default'))
+        insert_clue(conn, text, data.get("suspect_id"), data.get('case_id','default'), source_type=source_type)
         return jsonify({"ok": True}), 201
 
 
 @app.delete("/api/clues/<int:clue_id>")
+@auth_required
 def api_delete_clue(clue_id: int):
     with get_conn() as conn:
         delete_clue(conn, clue_id)
         return jsonify({"ok": True})
+
+
+@app.post('/api/clues/<int:clue_id>/annotate')
+@auth_required
+def api_annotate_clue(clue_id: int):
+    data = request.get_json(force=True) or {}
+    label = data.get('label')
+    notes = data.get('notes')
+    if not label:
+        return jsonify({'error': 'label required'}), 400
+    try:
+        with get_conn() as conn:
+            annotate_clue(conn, clue_id, label, notes)
+        return jsonify({'ok': True})
+    except ValueError as ve:
+        return jsonify({'error': str(ve)}), 400
+
+
+@app.post('/api/clues/recompute_duplicates')
+@auth_required
+def api_recompute_duplicates():
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id') or request.args.get('case_id') or 'default'
+    threshold = float(data.get('threshold', 0.85))
+    with get_conn() as conn:
+        try:
+            recompute_duplicates(conn, case_id, threshold=threshold)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    return jsonify({'ok': True, 'case_id': case_id, 'threshold': threshold})
+
+
+@app.post('/api/clues/recompute_quality')
+@auth_required
+def api_recompute_quality():
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id') or request.args.get('case_id')
+    with get_conn() as conn:
+        try:
+            recompute_clue_quality(conn, case_id)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    return jsonify({'ok': True, 'case_id': case_id or 'ALL'})
 
 
 @app.get("/api/evidence/<sid>")
@@ -425,6 +542,7 @@ def api_list_evidence(sid: str):
 
 
 @app.post("/api/evidence/<sid>")
+@auth_required
 def api_add_evidence(sid: str):
     data = request.get_json(force=True)
     with get_conn() as conn:
@@ -444,6 +562,7 @@ def api_list_allegations(sid: str):
 
 
 @app.post('/api/suspects/<sid>/allegations')
+@auth_required
 def api_add_allegation(sid: str):
     data = request.get_json(force=True) or {}
     offense = data.get('offense')
@@ -460,6 +579,7 @@ def api_add_allegation(sid: str):
 
 
 @app.delete('/api/allegations/<int:aid>')
+@auth_required
 def api_delete_allegation(aid: int):
     with get_conn() as conn:
         delete_allegation(conn, aid)
@@ -467,6 +587,7 @@ def api_delete_allegation(aid: int):
 
 
 @app.patch("/api/evidence/<int:evidence_id>")
+@auth_required
 def api_update_evidence(evidence_id: int):
     data = request.get_json(force=True) or {}
     with get_conn() as conn:
@@ -475,6 +596,7 @@ def api_update_evidence(evidence_id: int):
 
 
 @app.delete("/api/evidence/<int:evidence_id>")
+@auth_required
 def api_delete_evidence(evidence_id: int):
     with get_conn() as conn:
         delete_evidence(conn, evidence_id)
@@ -482,6 +604,7 @@ def api_delete_evidence(evidence_id: int):
 
 
 @app.post("/api/rescore")
+@auth_required
 def api_rescore():
     # Force recomputation of scores and persist timestamp
     case_id = request.args.get('case_id') or 'default'
@@ -565,6 +688,7 @@ def api_case_analysis():
 
 
 @app.post('/api/documents/upload')
+@auth_required
 def api_upload_document():
     """Upload a PDF, extract text, store it, and attempt suspect inference.
 
@@ -670,6 +794,7 @@ def api_list_documents():
 
 
 @app.post('/api/feedback')
+@auth_required
 def api_add_feedback():
     data = request.get_json(force=True) or {}
     suspect_id = data.get('suspect_id')
@@ -838,6 +963,7 @@ def api_graph():
 
 
 @app.post('/api/simulate')
+@auth_required
 def api_simulate():
     """Ephemeral composite scoring simulation.
 

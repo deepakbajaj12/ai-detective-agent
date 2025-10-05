@@ -74,6 +74,13 @@ def init_db():
             text TEXT NOT NULL,
             suspect_id TEXT REFERENCES suspects(id) ON DELETE SET NULL,
             case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+            source_type TEXT, -- manual | document | auto
+            duplicate_of_id INTEGER REFERENCES clues(id) ON DELETE SET NULL,
+            similarity REAL, -- similarity score to canonical if duplicate
+            clue_quality REAL, -- heuristic 0..1
+            annotation_label TEXT, -- relevant | irrelevant | ambiguous
+            annotation_notes TEXT,
+            annotation_updated_at TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
@@ -127,6 +134,25 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
+    # Basic users & API tokens (simple auth layer)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'user',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS api_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            token TEXT UNIQUE NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TEXT
+        )"""
+    )
     # Token-level clue attribution (per suspect, per clue) captured at scoring time
     cur.execute(
         """CREATE TABLE IF NOT EXISTS clue_attributions (
@@ -160,6 +186,20 @@ def init_db():
         cur.execute("ALTER TABLE clues ADD COLUMN case_id TEXT")
     except Exception:
         pass
+    # New evolving columns (idempotent attempts)
+    for alter in [
+        "ALTER TABLE clues ADD COLUMN source_type TEXT",
+        "ALTER TABLE clues ADD COLUMN duplicate_of_id INTEGER",
+        "ALTER TABLE clues ADD COLUMN similarity REAL",
+        "ALTER TABLE clues ADD COLUMN clue_quality REAL",
+        "ALTER TABLE clues ADD COLUMN annotation_label TEXT",
+        "ALTER TABLE clues ADD COLUMN annotation_notes TEXT",
+        "ALTER TABLE clues ADD COLUMN annotation_updated_at TEXT"
+    ]:
+        try:
+            cur.execute(alter)
+        except Exception:
+            pass
     try:
         cur.execute("ALTER TABLE evidence ADD COLUMN case_id TEXT")
     except Exception:
@@ -257,28 +297,145 @@ def delete_suspect(conn: sqlite3.Connection, sid: str):
     conn.commit()
 
 
-def list_clues(conn: sqlite3.Connection, suspect_id: Optional[str] = None, case_id: Optional[str] = None) -> List[dict]:
+def list_clues(conn: sqlite3.Connection, suspect_id: Optional[str] = None, case_id: Optional[str] = None,
+               hide_duplicates: bool = False, min_quality: float | None = None,
+               annotation_label: str | None = None) -> List[dict]:
     cur = conn.cursor()
-    if suspect_id and case_id:
-        cur.execute("SELECT * FROM clues WHERE suspect_id=? AND case_id=? ORDER BY id DESC", (suspect_id, case_id))
-    elif suspect_id:
-        cur.execute("SELECT * FROM clues WHERE suspect_id=? ORDER BY id DESC", (suspect_id,))
-    elif case_id:
-        cur.execute("SELECT * FROM clues WHERE case_id=? ORDER BY id DESC", (case_id,))
-    else:
-        cur.execute("SELECT * FROM clues ORDER BY id DESC")
+    clauses = []
+    params: list[Any] = []
+    if suspect_id:
+        clauses.append("suspect_id=?")
+        params.append(suspect_id)
+    if case_id:
+        clauses.append("case_id=?")
+        params.append(case_id)
+    if hide_duplicates:
+        clauses.append("(duplicate_of_id IS NULL)")
+    if min_quality is not None:
+        clauses.append("(clue_quality IS NULL OR clue_quality >= ?)")
+        params.append(min_quality)
+    if annotation_label:
+        clauses.append("annotation_label=?")
+        params.append(annotation_label)
+    base = "SELECT * FROM clues"
+    if clauses:
+        base += " WHERE " + " AND ".join(clauses)
+    base += " ORDER BY id DESC"
+    cur.execute(base, tuple(params))
     return [dict(r) for r in cur.fetchall()]
 
 
-def insert_clue(conn: sqlite3.Connection, text: str, suspect_id: Optional[str] = None, case_id: str = 'default'):
+def _similarity(a: str, b: str) -> float:
+    """Lightweight similarity ratio using SequenceMatcher (sufficient for small corpora)."""
+    import difflib
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _compute_clue_quality(text: str, source_type: str | None) -> float:
+    """Heuristic quality scoring.
+    Components:
+      - Source base weight
+      - Length optimal range bonus
+      - Named entity / capitalized token presence
+      - Numeric presence bonus
+    """
+    source_base = {
+        'manual': 0.7,
+        'document': 0.6,
+        'auto': 0.5
+    }.get((source_type or '').lower(), 0.55)
+    import re
+    tokens = re.findall(r"[A-Za-z0-9']+", text)
+    length = len(tokens)
+    if length == 0:
+        return 0.1
+    # length score peak between 5 and 40 tokens
+    if 5 <= length <= 40:
+        length_score = 0.2
+    else:
+        # diminish outside range
+        length_score = max(0.0, 0.2 - abs(length - 22) * 0.003)
+    caps = sum(1 for t in tokens if len(t) > 2 and t[0].isupper())
+    cap_score = 0.1 if caps > 0 else 0.0
+    num_score = 0.05 if any(t.isdigit() for t in tokens) else 0.0
+    quality = source_base + length_score + cap_score + num_score
+    return float(min(1.0, max(0.0, quality)))
+
+
+def insert_clue(conn: sqlite3.Connection, text: str, suspect_id: Optional[str] = None, case_id: str = 'default', source_type: str | None = None):
     cur = conn.cursor()
-    cur.execute("INSERT INTO clues(text, suspect_id, case_id) VALUES (?,?,?)", (text, suspect_id, case_id))
+    # duplicate detection (same case scope)
+    cur.execute("SELECT id, text FROM clues WHERE case_id=? ORDER BY id ASC", (case_id,))
+    existing = cur.fetchall()
+    dup_id = None
+    sim_val = None
+    best_sim = 0.0
+    for r in existing:
+        s = _similarity(text, r['text'])
+        if s > best_sim:
+            best_sim = s
+            dup_id = r['id']
+    # threshold for near-duplicate
+    if best_sim < 0.85:  # treat below threshold as unique
+        dup_id = None
+    else:
+        sim_val = round(best_sim, 4)
+    quality = _compute_clue_quality(text, source_type)
+    cur.execute("INSERT INTO clues(text, suspect_id, case_id, source_type, duplicate_of_id, similarity, clue_quality) VALUES (?,?,?,?,?,?,?)",
+                (text, suspect_id, case_id, source_type, dup_id, sim_val, quality))
     conn.commit()
 
 
 def delete_clue(conn: sqlite3.Connection, clue_id: int):
     cur = conn.cursor()
     cur.execute("DELETE FROM clues WHERE id=?", (clue_id,))
+    conn.commit()
+
+
+def annotate_clue(conn: sqlite3.Connection, clue_id: int, label: str, notes: str | None = None):
+    label = label.lower()
+    if label not in {'relevant','irrelevant','ambiguous'}:
+        raise ValueError('invalid label')
+    cur = conn.cursor()
+    cur.execute("UPDATE clues SET annotation_label=?, annotation_notes=?, annotation_updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (label, notes, clue_id))
+    conn.commit()
+
+
+def recompute_duplicates(conn: sqlite3.Connection, case_id: str, threshold: float = 0.85):
+    """Re-run duplicate detection across all clues for a case (first occurrence becomes canonical)."""
+    cur = conn.cursor()
+    cur.execute("SELECT id, text FROM clues WHERE case_id=? ORDER BY id ASC", (case_id,))
+    rows = cur.fetchall()
+    canonicals: list[sqlite3.Row] = []
+    mapping: list[tuple[int, int | None, float | None]] = []  # (id, dup_of, sim)
+    for r in rows:
+        rid = r['id']; txt = r['text']
+        best_id = None; best_sim = 0.0
+        for c in canonicals:
+            s = _similarity(txt, c['text'])
+            if s > best_sim:
+                best_sim = s; best_id = c['id']
+        if best_sim >= threshold:
+            mapping.append((rid, best_id, round(best_sim,4)))
+        else:
+            canonicals.append(r)
+            mapping.append((rid, None, None))
+    for rid, dup, sim in mapping:
+        cur.execute("UPDATE clues SET duplicate_of_id=?, similarity=? WHERE id=?", (dup, sim, rid))
+    conn.commit()
+
+
+def recompute_clue_quality(conn: sqlite3.Connection, case_id: str | None = None):
+    cur = conn.cursor()
+    if case_id:
+        cur.execute("SELECT id, text, source_type FROM clues WHERE case_id=?", (case_id,))
+    else:
+        cur.execute("SELECT id, text, source_type FROM clues")
+    rows = cur.fetchall()
+    for r in rows:
+        q = _compute_clue_quality(r['text'], r['source_type'])
+        cur.execute("UPDATE clues SET clue_quality=? WHERE id=?", (q, r['id']))
     conn.commit()
 
 
@@ -541,6 +698,38 @@ def feedback_stats(conn: sqlite3.Connection, case_id: str | None = None) -> dict
         'confirmation_rate': confirmation_rate,
         'precision_at_1_proxy': precision_at_1
     }
+
+
+# ---- User & Auth helpers ----
+def create_user(conn: sqlite3.Connection, username: str, password_hash: str, role: str = 'user') -> int:
+    cur = conn.cursor()
+    cur.execute("INSERT INTO users(username, password_hash, role) VALUES (?,?,?)", (username, password_hash, role))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def find_user(conn: sqlite3.Connection, username: str):
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE username=?", (username,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_token(conn: sqlite3.Connection, token: str):
+    cur = conn.cursor()
+    cur.execute("SELECT u.* FROM users u JOIN api_tokens t ON u.id=t.user_id WHERE t.token=?", (token,))
+    row = cur.fetchone()
+    if row:
+        cur.execute("UPDATE api_tokens SET last_used_at=CURRENT_TIMESTAMP WHERE token=?", (token,))
+        conn.commit()
+    return dict(row) if row else None
+
+
+def create_token(conn: sqlite3.Connection, user_id: int, token: str) -> int:
+    cur = conn.cursor()
+    cur.execute("INSERT INTO api_tokens(user_id, token) VALUES (?,?)", (user_id, token))
+    conn.commit()
+    return int(cur.lastrowid)
 
 
 if __name__ == "__main__":
