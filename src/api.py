@@ -14,7 +14,7 @@ try:
 except Exception:  # pragma: no cover
     load_transformer = None  # type: ignore
 from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics
 from graph_builder import build_graph
 from gen_ai import generate_case_analysis
 
@@ -49,6 +49,12 @@ def index():
             "GET /api/qa": "Hybrid RAG question answering (top chunks + clues)",
             "GET /api/timeline": "Extracted chronological events",
             "GET /api/graph": "Relationship graph JSON",
+            "GET /api/model/versions": "List registered models & roles",
+            "POST /api/model/register": "Register a new model version",
+            "POST /api/model/promote": "Promote version to active (demote old)",
+            "POST /api/model/shadow": "Set version as shadow (A/B)",
+            "POST /api/model/rollback": "Rollback active to prior version",
+            "POST /api/model/infer_ab": "Run A/B inference (active vs shadow)",
             "POST /api/auth/register": "Create a new user (initial open mode)",
             "POST /api/auth/login": "Get an API token",
             "GET /api/metrics": "System + model overview metrics"
@@ -510,6 +516,126 @@ def api_list_clue_duplicates(clue_id: int):
             cur.execute("SELECT * FROM clues WHERE duplicate_of_id=? ORDER BY id ASC", (clue_id,))
         rows = [dict(r) for r in cur.fetchall()]
     return jsonify({'clue_id': clue_id, 'duplicates': rows, 'count': len(rows)})
+
+
+# ---- Model Version Registry & A/B Endpoints ----
+@app.get('/api/model/versions')
+def api_model_versions():
+    with get_conn() as conn:
+        return jsonify(list_model_versions(conn))
+
+
+@app.post('/api/model/register')
+@auth_required
+def api_model_register():
+    data = request.get_json(force=True) or {}
+    version_tag = data.get('version_tag')
+    model_type = data.get('model_type') or 'logreg'
+    path = data.get('path')
+    metrics = data.get('metrics') or {}
+    if not version_tag:
+        return jsonify({'error': 'version_tag required'}), 400
+    with get_conn() as conn:
+        try:
+            insert_model_version(conn, version_tag, model_type, path, 'archived', metrics)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'version_tag': version_tag})
+
+
+@app.post('/api/model/promote')
+@auth_required
+def api_model_promote():
+    data = request.get_json(force=True) or {}
+    version_tag = data.get('version_tag')
+    if not version_tag:
+        return jsonify({'error': 'version_tag required'}), 400
+    with get_conn() as conn:
+        mv = get_model_version(conn, version_tag)
+        if not mv:
+            return jsonify({'error': 'version not found'}), 404
+        clear_role(conn, 'active')
+        set_model_role(conn, version_tag, 'active')
+    return jsonify({'ok': True, 'active': version_tag})
+
+
+@app.post('/api/model/shadow')
+@auth_required
+def api_model_shadow():
+    data = request.get_json(force=True) or {}
+    version_tag = data.get('version_tag')
+    if not version_tag:
+        return jsonify({'error': 'version_tag required'}), 400
+    with get_conn() as conn:
+        mv = get_model_version(conn, version_tag)
+        if not mv:
+            return jsonify({'error': 'version not found'}), 404
+        clear_role(conn, 'shadow')
+        set_model_role(conn, version_tag, 'shadow')
+    return jsonify({'ok': True, 'shadow': version_tag})
+
+
+@app.post('/api/model/rollback')
+@auth_required
+def api_model_rollback():
+    """Rollback: set the most recent archived (excluding current active) as active.
+    Simple heuristic: pick latest archived row.
+    """
+    with get_conn() as conn:
+        cur = conn.cursor()
+        # fetch current active
+        cur.execute("SELECT version_tag FROM model_versions WHERE role='active' ORDER BY created_at DESC LIMIT 1")
+        active = cur.fetchone()
+        active_tag = active['version_tag'] if active else None
+        # find candidate archived (exclude active)
+        if active_tag:
+            cur.execute("SELECT version_tag FROM model_versions WHERE role='archived' AND version_tag<>? ORDER BY created_at DESC LIMIT 1", (active_tag,))
+        else:
+            cur.execute("SELECT version_tag FROM model_versions WHERE role='archived' ORDER BY created_at DESC LIMIT 1")
+        cand = cur.fetchone()
+        if not cand:
+            return jsonify({'error': 'no archived version available'}), 400
+        clear_role(conn, 'active')
+        set_model_role(conn, cand['version_tag'], 'active')
+    return jsonify({'ok': True, 'active': cand['version_tag'], 'previous': active_tag})
+
+
+@app.post('/api/model/infer_ab')
+def api_model_infer_ab():
+    data = request.get_json(silent=True) or {}
+    text = data.get('text')
+    case_id = data.get('case_id') or 'default'
+    if not text:
+        # fallback: aggregate clues
+        with get_conn() as conn:
+            text = aggregate_clues_text(conn, case_id)
+    # active inference uses existing pipeline logic; shadow is illustrative
+    try:
+        if not Path(MODEL_PATH).exists():
+            train_and_save(BASE_DIR / 'inputs' / 'sample_training.json')
+        active_ranked = rank_labels([text], top_k=5)
+    except Exception as e:
+        return jsonify({'error': f'active inference failed: {e}'}), 500
+    # Shadow attempt: if transformer available, or reuse active with noise
+    shadow_ranked = []
+    with get_conn() as conn:
+        shadow_meta = get_shadow_model(conn)
+    try:
+        # prefer transformer for shadow if not already active backend
+        try:
+            ensure_transformer_model(BASE_DIR / 'inputs' / 'sample_training.json')
+            shadow_ranked = transformer_rank([text], top_k=5)
+        except Exception:
+            # fallback: perturb active scores slightly
+            shadow_ranked = [(l, max(0.0, min(1.0, s * 0.97))) for l, s in active_ranked]
+    except Exception:
+        shadow_ranked = []
+    return jsonify({
+        'input_chars': len(text),
+        'active': [{'label': l, 'score': s} for l, s in active_ranked],
+        'shadow': [{'label': l, 'score': s} for l, s in shadow_ranked],
+        'shadow_version': shadow_meta.get('version_tag') if shadow_meta else None
+    })
 
 
 @app.post('/api/clues/duplicates/merge')

@@ -153,6 +153,18 @@ def init_db():
             last_used_at TEXT
         )"""
     )
+    # Model versions registry (logreg / transformer)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS model_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version_tag TEXT UNIQUE NOT NULL,
+            model_type TEXT NOT NULL,
+            path TEXT,
+            role TEXT DEFAULT 'archived', -- active | shadow | archived
+            metrics TEXT, -- JSON serialized metrics
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
     # Token-level clue attribution (per suspect, per clue) captured at scoring time
     cur.execute(
         """CREATE TABLE IF NOT EXISTS clue_attributions (
@@ -730,6 +742,76 @@ def create_token(conn: sqlite3.Connection, user_id: int, token: str) -> int:
     cur.execute("INSERT INTO api_tokens(user_id, token) VALUES (?,?)", (user_id, token))
     conn.commit()
     return int(cur.lastrowid)
+
+
+# ---- Model Version Registry ----
+def insert_model_version(conn: sqlite3.Connection, version_tag: str, model_type: str, path: str | None, role: str = 'archived', metrics: dict | None = None):
+    cur = conn.cursor()
+    mjson = json.dumps(metrics) if metrics else None
+    cur.execute("INSERT INTO model_versions(version_tag, model_type, path, role, metrics) VALUES (?,?,?,?,?)", (version_tag, model_type, path, role, mjson))
+    conn.commit()
+
+
+def list_model_versions(conn: sqlite3.Connection) -> list[dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM model_versions ORDER BY created_at DESC")
+    rows = []
+    for r in cur.fetchall():
+        d = dict(r)
+        if d.get('metrics'):
+            try:
+                d['metrics'] = json.loads(d['metrics'])
+            except Exception:
+                d['metrics'] = None
+        rows.append(d)
+    return rows
+
+
+def get_model_version(conn: sqlite3.Connection, version_tag: str) -> dict | None:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM model_versions WHERE version_tag=?", (version_tag,))
+    r = cur.fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    if d.get('metrics'):
+        try:
+            d['metrics'] = json.loads(d['metrics'])
+        except Exception:
+            d['metrics'] = None
+    return d
+
+
+def get_active_model(conn: sqlite3.Connection) -> dict | None:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM model_versions WHERE role='active' ORDER BY created_at DESC LIMIT 1")
+    r = cur.fetchone()
+    return dict(r) if r else None
+
+
+def get_shadow_model(conn: sqlite3.Connection) -> dict | None:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM model_versions WHERE role='shadow' ORDER BY created_at DESC LIMIT 1")
+    r = cur.fetchone()
+    return dict(r) if r else None
+
+
+def set_model_role(conn: sqlite3.Connection, version_tag: str, role: str):
+    cur = conn.cursor()
+    cur.execute("UPDATE model_versions SET role=? WHERE version_tag=?", (role, version_tag))
+    conn.commit()
+
+
+def clear_role(conn: sqlite3.Connection, role: str):
+    cur = conn.cursor()
+    cur.execute("UPDATE model_versions SET role='archived' WHERE role=?", (role,))
+    conn.commit()
+
+
+def update_model_metrics(conn: sqlite3.Connection, version_tag: str, metrics: dict):
+    cur = conn.cursor()
+    cur.execute("UPDATE model_versions SET metrics=? WHERE version_tag=?", (json.dumps(metrics), version_tag))
+    conn.commit()
 
 
 if __name__ == "__main__":
