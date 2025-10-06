@@ -14,7 +14,7 @@ try:
 except Exception:  # pragma: no cover
     load_transformer = None  # type: ignore
 from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics
+from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot
 from graph_builder import build_graph
 from gen_ai import generate_case_analysis
 
@@ -55,6 +55,10 @@ def index():
             "POST /api/model/shadow": "Set version as shadow (A/B)",
             "POST /api/model/rollback": "Rollback active to prior version",
             "POST /api/model/infer_ab": "Run A/B inference (active vs shadow)",
+            "POST /api/snapshots": "Create a ranking snapshot",
+            "GET /api/snapshots": "List snapshots",
+            "GET /api/snapshots/compare": "Compare two snapshots side-by-side",
+            "GET /api/suspects/<id>/waterfall": "Score component breakdown for visualization",
             "POST /api/auth/register": "Create a new user (initial open mode)",
             "POST /api/auth/login": "Get an API token",
             "GET /api/metrics": "System + model overview metrics"
@@ -636,6 +640,89 @@ def api_model_infer_ab():
         'shadow': [{'label': l, 'score': s} for l, s in shadow_ranked],
         'shadow_version': shadow_meta.get('version_tag') if shadow_meta else None
     })
+
+
+# ---- Score Snapshots ----
+@app.post('/api/snapshots')
+@auth_required
+def api_create_snapshot():
+    data = request.get_json(force=True) or {}
+    case_id = data.get('case_id') or 'default'
+    label = data.get('label')
+    with get_conn() as conn:
+        suspects = db_list_suspects(conn, case_id)
+        sid = insert_snapshot(conn, label, case_id, suspects)
+    return jsonify({'ok': True, 'snapshot_id': sid})
+
+
+@app.get('/api/snapshots')
+def api_list_snapshots():
+    case_id = request.args.get('case_id')
+    limit = request.args.get('limit','50')
+    try:
+        lim = int(limit)
+    except ValueError:
+        lim = 50
+    with get_conn() as conn:
+        rows = list_snapshots(conn, case_id, lim)
+    return jsonify(rows)
+
+
+@app.get('/api/snapshots/compare')
+def api_compare_snapshots():
+    a = request.args.get('a')
+    b = request.args.get('b')
+    if not a or not b:
+        return jsonify({'error': 'a and b snapshot ids required'}), 400
+    try:
+        aid = int(a); bid = int(b)
+    except ValueError:
+        return jsonify({'error': 'invalid snapshot ids'}), 400
+    with get_conn() as conn:
+        sa = get_snapshot(conn, aid)
+        sb = get_snapshot(conn, bid)
+    if not sa or not sb:
+        return jsonify({'error': 'snapshot not found'}), 404
+    # Align by suspect id
+    map_a = {s['id']: s for s in sa['payload']}
+    map_b = {s['id']: s for s in sb['payload']}
+    all_ids = sorted(set(map_a.keys()) | set(map_b.keys()))
+    diffs = []
+    for sid in all_ids:
+        ea = map_a.get(sid) or {}
+        eb = map_b.get(sid) or {}
+        diffs.append({
+            'id': sid,
+            'name': ea.get('name') or eb.get('name'),
+            'a_composite': ea.get('composite_score'),
+            'b_composite': eb.get('composite_score'),
+            'delta': (None if (ea.get('composite_score') is None or eb.get('composite_score') is None) else (eb.get('composite_score') - ea.get('composite_score')))
+        })
+    return jsonify({'a': sa['id'], 'b': sb['id'], 'diffs': diffs, 'label_a': sa.get('label'), 'label_b': sb.get('label'), 'created_a': sa.get('created_at'), 'created_b': sb.get('created_at')})
+
+
+@app.get('/api/suspects/<sid>/waterfall')
+def api_score_waterfall(sid: str):
+    case_id = request.args.get('case_id') or 'default'
+    with get_conn() as conn:
+        s = db_get_suspect(conn, sid)
+        if not s:
+            return jsonify({'error': 'not found'}), 404
+    # The components already persisted on suspect row
+    # Provide an ordered breakdown for front-end waterfall
+    ml = s.get('score') or 0.0
+    ev = s.get('evidence_score') or 0.0
+    offense_boost = s.get('offense_boost') or 0.0
+    base = s.get('composite_base') if s.get('composite_base') is not None else (0.7*ml + 0.3*ev)  # fallback
+    comp = s.get('composite_score') or (base + offense_boost)
+    steps = [
+        {'label': 'ML Score', 'value': ml, 'type': 'base'},
+        {'label': 'Evidence Score', 'value': ev, 'type': 'increment'},
+        {'label': 'Weighted Base', 'value': base, 'type': 'result'},
+        {'label': 'Offense Boost', 'value': offense_boost, 'type': 'increment'},
+        {'label': 'Composite', 'value': comp, 'type': 'total'}
+    ]
+    return jsonify({'suspect_id': sid, 'case_id': case_id, 'steps': steps})
 
 
 @app.post('/api/clues/duplicates/merge')

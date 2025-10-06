@@ -12,6 +12,21 @@ import Alert from '@mui/material/Alert';
 import Fab from '@mui/material/Fab';
 import AddIcon from '@mui/icons-material/Add';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import TextField from '@mui/material/TextField';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+import Table from '@mui/material/Table';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
+import TableBody from '@mui/material/TableBody';
+import TableCell from '@mui/material/TableCell';
 import Divider from '@mui/material/Divider';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
@@ -66,6 +81,16 @@ export default function SuspectList() {
   const [showAttribution, setShowAttribution] = useState(false);
   const [attributionData, setAttributionData] = useState(null);
   const [showSim, setShowSim] = useState(false);
+  // Snapshot state
+  const [snapshots, setSnapshots] = useState([]);
+  const [snapshotA, setSnapshotA] = useState('');
+  const [snapshotB, setSnapshotB] = useState('');
+  const [snapshotDiff, setSnapshotDiff] = useState(null);
+  const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false);
+  const [snapshotLabel, setSnapshotLabel] = useState('');
+  const [creatingSnapshot, setCreatingSnapshot] = useState(false);
+  // Waterfall expanded per suspect
+  const [waterfall, setWaterfall] = useState({}); // id -> { loading, steps }
   useEffect(()=> {
     apiFetch('/api/clues?limit=5')
       .then(data => setLatestClues(Array.isArray(data)? data: []))
@@ -77,6 +102,26 @@ export default function SuspectList() {
       .then(d => setFbStats(d))
       .catch(()=> setFbStats(null));
   }, [suspects]);
+
+  // Load snapshots list
+  const loadSnapshots = useCallback(() => {
+    apiFetch('/api/snapshots?limit=100')
+      .then(data => Array.isArray(data) && setSnapshots(data))
+      .catch(()=> setSnapshots([]));
+  }, []);
+
+  useEffect(()=> { loadSnapshots(); }, [loadSnapshots]);
+
+  // Load diff when both selected
+  useEffect(()=> {
+    if(snapshotA && snapshotB && snapshotA !== snapshotB){
+      apiFetch(`/api/snapshots/compare?a=${snapshotA}&b=${snapshotB}`)
+        .then(setSnapshotDiff)
+        .catch(()=> setSnapshotDiff(null));
+    } else {
+      setSnapshotDiff(null);
+    }
+  }, [snapshotA, snapshotB]);
 
   // Load attribution lazily when panel opened
   useEffect(()=> {
@@ -98,6 +143,36 @@ export default function SuspectList() {
     apiFetch(`/api/suspects/${sid}/attribution`)
       .then(setAttributionData)
       .catch(()=> setAttributionData({ attribution: [] }));
+  };
+
+  const createSnapshot = () => {
+    setCreatingSnapshot(true);
+    apiFetch('/api/snapshots', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ label: snapshotLabel || null }) })
+      .then(()=> { setSnapshotDialogOpen(false); setSnapshotLabel(''); loadSnapshots(); })
+      .finally(()=> setCreatingSnapshot(false));
+  };
+
+  const toggleWaterfall = (sid) => {
+    setWaterfall(prev => {
+      const current = prev[sid];
+      // collapse if already loaded
+      if(current && !current.loading && current.open){
+        return { ...prev, [sid]: { ...current, open:false } };
+      }
+      // if not loaded, set loading and fetch
+      if(!current || (!current.steps && !current.loading)){
+        setTimeout(()=> {
+          apiFetch(`/api/suspects/${sid}/waterfall`)
+            .then(data => {
+              setWaterfall(p => ({ ...p, [sid]: { ...p[sid], loading:false, steps:data.steps || [], open:true } }));
+            })
+            .catch(()=> setWaterfall(p => ({ ...p, [sid]: { ...p[sid], loading:false, steps:[], open:true } })));
+        },0);
+        return { ...prev, [sid]: { loading:true, steps:null, open:true } };
+      }
+      // already have steps but was closed
+      return { ...prev, [sid]: { ...current, open:true } };
+    });
   };
 
   if (loading) return <LinearProgress />;
@@ -133,6 +208,7 @@ export default function SuspectList() {
               <Chip size="small" variant="outlined" label="Severity Legend" />
               <Chip size="small" label="Attribution" color={showAttribution?'secondary':'default'} onClick={()=> setShowAttribution(s => !s)} />
               <Chip size="small" label="Simulate" color={showSim?'secondary':'default'} onClick={()=> setShowSim(s => !s)} />
+              <Chip size="small" label="Create Snapshot" color="info" onClick={()=> setSnapshotDialogOpen(true)} />
               <Stack direction="row" spacing={1} alignItems="center">
                 <Chip size="small" label="High" color="error" />
                 <Chip size="small" label="Medium" color="warning" />
@@ -143,6 +219,26 @@ export default function SuspectList() {
                 <Chip size="small" variant="outlined" label={`Feedback: ${fbStats.total} (P@1 ${fbStats.precision_at_1_proxy!==null && fbStats.precision_at_1_proxy!==undefined ? (fbStats.precision_at_1_proxy*100).toFixed(0)+'%' : '—'})`} />
               )}
             </Stack>
+            {/* Snapshot comparison controls */}
+            {snapshots.length > 0 && (
+              <Stack direction={{ xs:'column', sm:'row' }} spacing={1} alignItems={{ xs:'stretch', sm:'center' }}>
+                <FormControl size="small" sx={{ minWidth:160 }}>
+                  <InputLabel id="snap-a-label">Snapshot A</InputLabel>
+                  <Select labelId="snap-a-label" label="Snapshot A" value={snapshotA} onChange={e=> setSnapshotA(e.target.value)}>
+                    <MenuItem value=""><em>None</em></MenuItem>
+                    {snapshots.map(s => <MenuItem key={s.id} value={s.id}>{s.label || `#${s.id}`} </MenuItem>)}
+                  </Select>
+                </FormControl>
+                <FormControl size="small" sx={{ minWidth:160 }}>
+                  <InputLabel id="snap-b-label">Snapshot B</InputLabel>
+                  <Select labelId="snap-b-label" label="Snapshot B" value={snapshotB} onChange={e=> setSnapshotB(e.target.value)}>
+                    <MenuItem value=""><em>None</em></MenuItem>
+                    {snapshots.map(s => <MenuItem key={s.id} value={s.id}>{s.label || `#${s.id}`} </MenuItem>)}
+                  </Select>
+                </FormControl>
+                {snapshotDiff && <Chip size="small" color="secondary" variant="outlined" label={`Δ suspects: ${snapshotDiff.diffs.length}`} />}
+              </Stack>
+            )}
           </Stack>
         )}
       </Box>
@@ -182,6 +278,7 @@ export default function SuspectList() {
                       </Tooltip>
                     )}
                     {showAttribution && <Chip size="small" label="View Attr" variant="outlined" onClick={(e)=> { e.preventDefault(); openAttributionFor(s.id); }} />}
+                    <Chip size="small" label={waterfall[s.id]?.open ? 'Hide Steps' : 'Waterfall'} variant="outlined" onClick={(e)=> { e.preventDefault(); toggleWaterfall(s.id); }} />
                   </Stack>}
                   subheader={`Composite: ${compPct}% (ML ${mlPct}%, EV ${evPct}%, Offense +${boostPct}%)`}
                 />
@@ -192,12 +289,69 @@ export default function SuspectList() {
                     {(s.tags || []).map((t) => (<Chip key={t} size="small" label={t} />))}
                   </Stack>
                   <FeedbackBar suspect={s} rank={idx} />
+                  {waterfall[s.id]?.open && (
+                    <Box sx={{ mt:1.5, p:1, border:'1px dashed rgba(191,164,111,0.4)', borderRadius:1 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display:'block', mb:0.5 }}>Score Waterfall</Typography>
+                      {waterfall[s.id].loading && <Typography variant="caption">Loading breakdown...</Typography>}
+                      {!waterfall[s.id].loading && waterfall[s.id].steps && waterfall[s.id].steps.length > 0 && (
+                        <Stack spacing={0.5}>
+                          {(() => {
+                            const steps = waterfall[s.id].steps;
+                            const maxVal = Math.max(...steps.map(st => Math.abs(st.value)) , 0.0001);
+                            return steps.map(st => (
+                              <Stack key={st.label} direction="row" spacing={1} alignItems="center">
+                                <Typography variant="caption" sx={{ width:90 }}>{st.label}</Typography>
+                                <Box sx={{ flexGrow:1, position:'relative', height:10, background:(theme)=> theme.palette.mode==='dark' ? '#222' : '#eee', borderRadius:4 }}>
+                                  <Box sx={{ position:'absolute', left:0, top:0, bottom:0, width:`${(Math.abs(st.value)/maxVal)*100}%`, background: st.type==='increment' ? 'linear-gradient(90deg,#66bb6a,#43a047)' : st.type==='base' ? 'linear-gradient(90deg,#42a5f5,#1e88e5)' : st.type==='result' ? 'linear-gradient(90deg,#7e57c2,#5e35b1)' : st.type==='total' ? 'linear-gradient(90deg,#ef5350,#d32f2f)' : '#bfa46f', borderRadius:4 }} />
+                                </Box>
+                                <Typography variant="caption" sx={{ width:48, textAlign:'right' }}>{(st.value*100).toFixed(1)}%</Typography>
+                              </Stack>
+                            ));
+                          })()}
+                        </Stack>
+                      )}
+                      {!waterfall[s.id].loading && (!waterfall[s.id].steps || waterfall[s.id].steps.length===0) && <Typography variant="caption" color="text.secondary">No breakdown available.</Typography>}
+                    </Box>
+                  )}
                 </CardContent>
               </Card>
             </Grid>
           );
         })}
       </Grid>
+      {/* Snapshot diff table */}
+      {snapshotDiff && snapshotDiff.diffs && (
+        <Box sx={{ mt:6 }}>
+          <Typography variant="h6" sx={{ mb:1 }}>Snapshot Comparison</Typography>
+          <Table size="small" sx={{ maxWidth:860 }}>
+            <TableHead>
+              <TableRow>
+                <TableCell>Suspect ID</TableCell>
+                <TableCell>Name</TableCell>
+                <TableCell align="right">A</TableCell>
+                <TableCell align="right">B</TableCell>
+                <TableCell align="right">Δ</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {snapshotDiff.diffs.map(d => {
+                const delta = d.delta ?? 0;
+                const color = delta > 0 ? 'success.main' : delta < 0 ? 'error.main' : 'text.secondary';
+                return (
+                  <TableRow key={d.id} hover>
+                    <TableCell>{d.id}</TableCell>
+                    <TableCell>{d.name}</TableCell>
+                    <TableCell align="right">{d.a_composite != null ? (d.a_composite*100).toFixed(1)+'%' : '—'}</TableCell>
+                    <TableCell align="right">{d.b_composite != null ? (d.b_composite*100).toFixed(1)+'%' : '—'}</TableCell>
+                    <TableCell align="right" sx={{ color }}>{d.delta != null ? (delta*100).toFixed(1)+'%' : '—'}</TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+          <Typography variant="caption" color="text.secondary" sx={{ display:'block', mt:0.5 }}>Δ column = B - A (increase positive).</Typography>
+        </Box>
+      )}
       {!isEmpty && (
         <>
           <Divider sx={{ my:4 }} />
@@ -220,6 +374,17 @@ export default function SuspectList() {
       <AddClueDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
       <AttributionPanel open={showAttribution} onClose={()=> setShowAttribution(false)} data={attributionData} />
       <SimulationPanel open={showSim} onClose={()=> setShowSim(false)} suspects={displayed} />
+      <Dialog open={snapshotDialogOpen} onClose={()=> setSnapshotDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Create Snapshot</DialogTitle>
+        <DialogContent>
+          <TextField fullWidth size="small" label="Label (optional)" value={snapshotLabel} onChange={e=> setSnapshotLabel(e.target.value)} sx={{ mt:1 }} />
+          <Typography variant="caption" color="text.secondary" sx={{ display:'block', mt:1 }}>Captures current suspect composite scores for later comparison.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={()=> setSnapshotDialogOpen(false)} disabled={creatingSnapshot}>Cancel</Button>
+          <Button onClick={createSnapshot} variant="contained" disabled={creatingSnapshot}>{creatingSnapshot? 'Creating...':'Create'}</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

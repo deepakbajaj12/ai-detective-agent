@@ -46,6 +46,8 @@ export default function AddClueDialog({ open, onClose }) {
     .then(() => {
       setSnack('Clue added');
       window.dispatchEvent(new CustomEvent('clueAdded'));
+      // Optional auto-snapshot after ingestion event
+      apiFetch('/api/snapshots', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ label: 'auto: clue added' }) }).catch(()=>{});
       onClose();
     })
     .catch(e => setError(e.message))

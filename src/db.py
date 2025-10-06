@@ -165,6 +165,16 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
+    # Snapshots of suspect ranking state
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS score_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT,
+            case_id TEXT,
+            payload TEXT NOT NULL, -- JSON serialized list of suspects with key score fields
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
     # Token-level clue attribution (per suspect, per clue) captured at scoring time
     cur.execute(
         """CREATE TABLE IF NOT EXISTS clue_attributions (
@@ -812,6 +822,56 @@ def update_model_metrics(conn: sqlite3.Connection, version_tag: str, metrics: di
     cur = conn.cursor()
     cur.execute("UPDATE model_versions SET metrics=? WHERE version_tag=?", (json.dumps(metrics), version_tag))
     conn.commit()
+
+
+# ---- Snapshot helpers ----
+def insert_snapshot(conn: sqlite3.Connection, label: str | None, case_id: str, suspects: list[dict]) -> int:
+    cur = conn.cursor()
+    minimal = []
+    for s in suspects:
+        minimal.append({
+            'id': s.get('id'),
+            'name': s.get('name'),
+            'score': s.get('score'),
+            'evidence_score': s.get('evidence_score'),
+            'offense_boost': s.get('offense_boost'),
+            'composite_score': s.get('composite_score'),
+            'risk_level': s.get('risk_level')
+        })
+    cur.execute("INSERT INTO score_snapshots(label, case_id, payload) VALUES (?,?,?)", (label, case_id, json.dumps(minimal)))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_snapshots(conn: sqlite3.Connection, case_id: str | None = None, limit: int = 50) -> list[dict]:
+    cur = conn.cursor()
+    if case_id:
+        cur.execute("SELECT * FROM score_snapshots WHERE case_id=? ORDER BY id DESC LIMIT ?", (case_id, limit))
+    else:
+        cur.execute("SELECT * FROM score_snapshots ORDER BY id DESC LIMIT ?", (limit,))
+    rows = []
+    for r in cur.fetchall():
+        d = dict(r)
+        try:
+            d['payload'] = json.loads(d['payload'])
+        except Exception:
+            d['payload'] = []
+        rows.append(d)
+    return rows
+
+
+def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict | None:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM score_snapshots WHERE id=?", (snapshot_id,))
+    r = cur.fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    try:
+        d['payload'] = json.loads(d['payload'])
+    except Exception:
+        d['payload'] = []
+    return d
 
 
 if __name__ == "__main__":
