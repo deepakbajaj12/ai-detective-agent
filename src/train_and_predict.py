@@ -2,7 +2,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from utils import read_clues
+try:
+    from src.utils import read_clues
+except ImportError:  # fallback when run as script
+    from utils import read_clues  # type: ignore
 from ml_suspect_model import train_and_save, rank_labels, MODEL_PATH
 
 

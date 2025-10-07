@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
-from utils import read_clues
+try:
+    from src.utils import read_clues
+except ImportError:  # fallback when run as script
+    from utils import read_clues  # type: ignore
 from reasoning_agent import analyze_clues
 from pdf_generator import save_report
 

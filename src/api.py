@@ -5,16 +5,28 @@ from typing import Dict, Any
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from utils import read_clues
-from ml_suspect_model import MODEL_PATH, train_and_save, rank_labels
-from ml_transformer import ensure_transformer_model, predict_labels as transformer_rank
+try:  # package import (preferred when running `python -m src.api`)
+    from src.utils import read_clues
+    from src.ml_suspect_model import MODEL_PATH, train_and_save, rank_labels
+    from src.ml_transformer import ensure_transformer_model, predict_labels as transformer_rank
+except ImportError:  # fallback if executed as `python src/api.py`
+    from utils import read_clues  # type: ignore
+    from ml_suspect_model import MODEL_PATH, train_and_save, rank_labels  # type: ignore
+    from ml_transformer import ensure_transformer_model, predict_labels as transformer_rank  # type: ignore
 try:
     # optional: only needed for attention-based attribution
-    from ml_transformer import load_transformer  # type: ignore
+    try:
+        from src.ml_transformer import load_transformer  # type: ignore
+    except Exception:
+        from ml_transformer import load_transformer  # type: ignore
 except Exception:  # pragma: no cover
     load_transformer = None  # type: ignore
-from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
-from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot
+try:
+    from src.semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
+    from src.db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot
+except ImportError:  # fallback
+    from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend  # type: ignore
+    from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot  # type: ignore
 from graph_builder import build_graph
 from gen_ai import generate_case_analysis
 
