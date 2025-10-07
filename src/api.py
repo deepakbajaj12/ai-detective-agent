@@ -1493,4 +1493,29 @@ def api_metrics():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Helpful startup diagnostics: list registered routes once.
+    print("\n[AI Detective] Registered routes:")
+    try:
+        for r in app.url_map.iter_rules():
+            if str(r).startswith('/static'):
+                continue
+            methods = ','.join(sorted(m for m in r.methods if m not in {'HEAD','OPTIONS'}))
+            print(f"  {r}  ->  {methods}")
+    except Exception:
+        pass
+    # Add a lightweight health endpoint dynamically if not already present
+    if 'health' not in {str(r).strip('/') for r in app.url_map.iter_rules()}:
+        @app.get('/health')
+        def health():  # type: ignore
+            return jsonify({'ok': True, 'service': 'ai-detective', 'routes': len(list(app.url_map.iter_rules()))})
+
+    # JSON 404 handler to aid frontend debugging (returns path + hint)
+    @app.errorhandler(404)
+    def _not_found(e):  # type: ignore
+        from flask import request as _req
+        return jsonify({'error': 'not found', 'path': _req.path, 'hint': 'If expected /api/* routes are missing, ensure you are running src/api.py from project root.'}), 404
+
+    import os
+    port = int(os.environ.get('AI_DETECTIVE_PORT', '5000'))
+    print(f"\n[AI Detective] Starting server on 0.0.0.0:{port} (set AI_DETECTIVE_PORT env var to change)\n")
+    app.run(host="0.0.0.0", port=port, debug=True)
