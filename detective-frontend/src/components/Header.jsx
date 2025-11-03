@@ -8,9 +8,12 @@ import { Link as RouterLink } from 'react-router-dom';
 import SearchIcon from '@mui/icons-material/Search';
 import LogoTitle from './LogoTitle';
 import ThemeModeToggle from './ThemeModeToggle';
+import BuildCircleOutlinedIcon from '@mui/icons-material/BuildCircleOutlined';
+import JobsPanel from './JobsPanel';
 
 // Legacy headerStyle removed (LogoTitle supplies styling)
 export default function Header({ mode, onToggleMode }) {
+  const [jobsOpen, setJobsOpen] = React.useState(false);
   return (
     <AppBar position="sticky" color="primary">
       <Toolbar>
@@ -29,9 +32,11 @@ export default function Header({ mode, onToggleMode }) {
           <Button color="inherit" component={RouterLink} to="/qa">QA</Button>
           <Button color="inherit" component={RouterLink} to="/timeline">Timeline</Button>
           <Button color="inherit" component={RouterLink} to="/graph">Graph</Button>
+          <Button color="inherit" startIcon={<BuildCircleOutlinedIcon />} onClick={()=>setJobsOpen(true)}>Jobs</Button>
           <ThemeModeToggle mode={mode} onToggle={onToggleMode} />
         </Stack>
       </Toolbar>
+      <JobsPanel open={jobsOpen} onClose={()=>setJobsOpen(false)} />
     </AppBar>
   );
 }

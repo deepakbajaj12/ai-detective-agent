@@ -16,7 +16,10 @@ Currently clues do not store originating document_id; future schema could add it
 from __future__ import annotations
 from typing import Dict, Any
 import re
-from db import get_conn, list_suspects, list_clues, list_allegations
+try:
+    from src.db import get_conn, list_suspects, list_clues, list_allegations  # type: ignore
+except Exception:
+    from db import get_conn, list_suspects, list_clues, list_allegations  # type: ignore
 
 
 def build_graph(case_id: str = 'default') -> Dict[str, Any]:

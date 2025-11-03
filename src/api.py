@@ -27,8 +27,16 @@ try:
 except ImportError:  # fallback
     from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend  # type: ignore
     from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot  # type: ignore
-from graph_builder import build_graph
-from gen_ai import generate_case_analysis
+try:
+    from src.graph_builder import build_graph  # type: ignore
+    from src.gen_ai import generate_case_analysis  # type: ignore
+except Exception:
+    from graph_builder import build_graph  # type: ignore
+    from gen_ai import generate_case_analysis  # type: ignore
+try:
+    from src.jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh  # type: ignore
+except Exception:
+    from jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh  # type: ignore
 
 
 app = Flask(__name__)
@@ -73,9 +81,61 @@ def index():
             "GET /api/suspects/<id>/waterfall": "Score component breakdown for visualization",
             "POST /api/auth/register": "Create a new user (initial open mode)",
             "POST /api/auth/login": "Get an API token",
-            "GET /api/metrics": "System + model overview metrics"
+            "GET /api/metrics": "System + model overview metrics",
+            "POST /api/jobs/transformer_train": "Start background transformer training (optional deps)",
+            "POST /api/jobs/index_refresh": "Rebuild semantic index in background",
+            "GET /api/jobs": "List recent jobs (durable if Redis/RQ enabled)",
+            "GET /api/jobs/<id>": "Poll job status",
+            "POST /api/jobs/<id>/cancel": "Cancel a running or queued job (RQ only)"
         }
     })
+
+
+# ---- Jobs API (lightweight background tasks) ----
+
+@app.post('/api/jobs/transformer_train')
+def api_job_transformer_train():
+    data = request.get_json(silent=True) or {}
+    rel = data.get('training_json') or 'inputs/sample_training.json'
+    path = (BASE_DIR / rel).resolve()
+    job_id = start_job('transformer_train', task_transformer_train, str(path))
+    return jsonify({'ok': True, 'job_id': job_id}), 202
+
+
+@app.post('/api/jobs/index_refresh')
+def api_job_index_refresh():
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id') or 'default'
+    job_id = start_job('index_refresh', task_index_refresh, case_id)
+    return jsonify({'ok': True, 'job_id': job_id}), 202
+
+
+@app.get('/api/jobs/<job_id>')
+def api_job_status(job_id: str):
+    j = get_job(job_id)
+    if not j:
+        return jsonify({'error': 'job not found'}), 404
+    return jsonify(j)
+# (removed duplicate legacy job endpoints)
+
+
+@app.get('/api/jobs')
+def api_jobs_list():
+    try:
+        lim = int(request.args.get('limit','50'))
+    except ValueError:
+        lim = 50
+    rows = jobs_list(lim)
+    return jsonify({'jobs': rows, 'count': len(rows)})
+
+
+@app.post('/api/jobs/<job_id>/cancel')
+def api_job_cancel(job_id: str):
+    ok = jobs_cancel(job_id)
+    if not ok:
+        return jsonify({'error': 'cancel not supported or job not found'}), 400
+    return jsonify({'ok': True, 'job_id': job_id})
+
 
 
 # ---- Auth Utilities ----

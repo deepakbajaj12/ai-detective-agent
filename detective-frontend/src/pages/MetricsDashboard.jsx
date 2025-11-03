@@ -54,14 +54,14 @@ export default function MetricsDashboard() {
         </Tooltip>
       </Stack>
       <Grid container spacing={2}>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatCard title='Counts' accent>
             <Stack spacing={0.5}>
               {Object.entries(counts).map(([k,v]) => <Typography key={k} variant='body2'>{k}: {v}</Typography>)}
             </Stack>
           </StatCard>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatCard title='Score Distribution'>
             {scores && scores.count ? (
               <Stack spacing={0.5}>
@@ -73,7 +73,7 @@ export default function MetricsDashboard() {
             ) : <Typography variant='body2' color='text.secondary'>No scores</Typography>}
           </StatCard>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatCard title='Severity Mix'>
             {severity && Object.keys(severity).length>0 ? (
               <Stack direction='row' spacing={1} flexWrap='wrap'>
@@ -82,20 +82,20 @@ export default function MetricsDashboard() {
             ) : <Typography variant='body2' color='text.secondary'>No allegations</Typography>}
           </StatCard>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatCard title='Evidence Weights'>
             <Typography variant='body2'>Avg: {evidence.avg_weight !== null && evidence.avg_weight !== undefined ? evidence.avg_weight.toFixed(2): '—'}</Typography>
             <Typography variant='body2'>Total: {evidence.total_weight.toFixed(2)}</Typography>
           </StatCard>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatCard title='Ingestion'>
             <Typography variant='body2'>Docs: {ingestion.documents}</Typography>
             <Typography variant='body2'>Total chars: {ingestion.total_chars}</Typography>
             <Typography variant='body2'>Avg chars: {ingestion.avg_chars ? ingestion.avg_chars.toFixed(0) : '—'}</Typography>
           </StatCard>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatCard title='Feedback'>
             <Typography variant='body2'>Total: {feedback.total}</Typography>
             <Typography variant='body2'>Confirm: {feedback.counts.confirm || 0}</Typography>
@@ -105,14 +105,14 @@ export default function MetricsDashboard() {
             <Typography variant='body2'>P@1 (proxy): {feedback.precision_at_1_proxy !== null && feedback.precision_at_1_proxy !== undefined ? (feedback.precision_at_1_proxy*100).toFixed(1)+'%' : '—'}</Typography>
           </StatCard>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatCard title='Model'>
             <Typography variant='body2'>Backend: {model.backend}</Typography>
             <Typography variant='body2'>α default: {model.alpha_default}</Typography>
             <Typography variant='body2'>β default: {model.offense_beta_default}</Typography>
           </StatCard>
         </Grid>
-        <Grid item xs={12} md={8}>
+        <Grid size={{ xs: 12, md: 8 }}>
           <StatCard title='Narrative Insights'>
             <Typography variant='caption' color='text.secondary'>Ideas:</Typography>
             <ul style={{ marginTop: 4, paddingLeft: 16 }}>

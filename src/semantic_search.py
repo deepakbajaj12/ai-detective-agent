@@ -11,7 +11,10 @@ from typing import List, Dict, Any, Optional, Tuple
 import math
 import threading
 
-from db import get_conn, list_clues
+try:  # support both package and script execution
+    from src.db import get_conn, list_clues  # type: ignore
+except Exception:
+    from db import get_conn, list_clues  # type: ignore
 
 _lock = threading.Lock()
 _indexes: Dict[str, Dict[str, Any]] = {}

@@ -242,7 +242,7 @@ export default function SuspectList() {
           </Stack>
         )}
       </Box>
-      <Grid container spacing={2}>
+  <Grid container spacing={2}>
         {displayed.map((s, idx) => {
           const tier = scoreTier(s.composite_score ?? s.score ?? 0);
           const mlPct = ((s.score||0)*100).toFixed(1);
@@ -250,7 +250,7 @@ export default function SuspectList() {
           const compPct = ((s.composite_score||s.score||0)*100).toFixed(1);
           const boostPct = ((s.offense_boost||0)*100).toFixed(1);
           return (
-            <Grid key={s.id} item xs={12} sm={6} md={4}>
+            <Grid key={s.id} size={{ xs: 12, sm: 6, md: 4 }}>
               <Card component={RouterLink} to={`/suspects/${s.id}`} className="case-card" sx={{ textDecoration: 'none', position:'relative', background: 'linear-gradient(135deg, rgba(255,255,255,0.4), rgba(255,255,255,0.15))' }}>
                 <div className={`risk-ribbon ${tier.label.toLowerCase()}`}>{tier.label}</div>
                 <CardHeader
