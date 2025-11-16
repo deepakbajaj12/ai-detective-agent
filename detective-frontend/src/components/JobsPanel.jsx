@@ -12,12 +12,14 @@ import Paper from '@mui/material/Paper';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
 import { startIndexRefresh, startTransformerTrain, getJobStatus, listJobs, cancelJob } from '../jobsApi';
+import { apiFetch } from '../apiBase';
 
 export default function JobsPanel({ open, onClose }) {
   const [caseId, setCaseId] = React.useState('default');
   const [trainingPath, setTrainingPath] = React.useState('inputs/sample_training.json');
   const [jobs, setJobs] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
+  const [backend, setBackend] = React.useState('');
 
   // Poll in-progress jobs
   React.useEffect(() => {
@@ -26,7 +28,11 @@ export default function JobsPanel({ open, onClose }) {
     (async () => {
       try {
         setLoading(true);
-        const data = await listJobs(50);
+        const [sys, data] = await Promise.all([
+          apiFetch('/api/system').catch(()=>null),
+          listJobs(50).catch(()=>({ jobs: [] }))
+        ]);
+        if (sys && sys.job_backend) setBackend(sys.job_backend);
         if (data && data.jobs) setJobs(data.jobs);
       } catch {}
       finally { setLoading(false); }
@@ -102,7 +108,7 @@ export default function JobsPanel({ open, onClose }) {
             <Typography variant="caption" color="text.secondary">Note: transformer training requires optional dependencies (torch/transformers); otherwise job may fail fast.</Typography>
           </Paper>
           <Divider/>
-          <Typography variant="subtitle2">Recent jobs</Typography>
+          <Typography variant="subtitle2">Recent jobs {backend && (<span style={{ fontSize:12, color:'#777' }}>· backend: {backend}</span>)}</Typography>
           <Stack spacing={1}>
             {jobs.length === 0 && (
               <Typography color="text.secondary">{loading ? 'Loading...' : 'No jobs yet. Start one above.'}</Typography>

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response, stream_with_context
 from flask_cors import CORS
 
 try:  # package import (preferred when running `python -m src.api`)
@@ -36,8 +36,14 @@ except Exception:
     from gen_ai import generate_case_analysis  # type: ignore
 try:
     from src.jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh  # type: ignore
+    from src.jobs_backend import backend_mode as job_backend_mode  # type: ignore
 except Exception:
     from jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh  # type: ignore
+    try:
+        from jobs_backend import backend_mode as job_backend_mode  # type: ignore
+    except Exception:
+        def job_backend_mode():  # type: ignore
+            return 'memory'
 
 
 app = Flask(__name__)
@@ -85,6 +91,7 @@ def index():
             "GET /api/metrics": "System + model overview metrics",
             "POST /api/jobs/transformer_train": "Start background transformer training (optional deps)",
             "POST /api/jobs/index_refresh": "Rebuild semantic index in background",
+            "GET /api/system": "System info (job backend mode, counts)",
             "GET /api/jobs": "List recent jobs (durable if Redis/RQ enabled)",
             "GET /api/jobs/<id>": "Poll job status",
             "POST /api/jobs/<id>/cancel": "Cancel a running or queued job (RQ only)"
@@ -136,6 +143,28 @@ def api_job_cancel(job_id: str):
     if not ok:
         return jsonify({'error': 'cancel not supported or job not found'}), 400
     return jsonify({'ok': True, 'job_id': job_id})
+
+
+@app.get('/api/system')
+def api_system():
+    """Return small system snapshot including jobs backend mode and minimal counts."""
+    try:
+        jb = job_backend_mode()
+    except Exception:
+        jb = 'memory'
+    counts = {}
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) as c FROM suspects")
+            counts['suspects'] = int(cur.fetchone()['c'])
+            cur.execute("SELECT COUNT(*) as c FROM clues")
+            counts['clues'] = int(cur.fetchone()['c'])
+            cur.execute("SELECT COUNT(*) as c FROM documents")
+            counts['documents'] = int(cur.fetchone()['c'])
+    except Exception:
+        counts = {}
+    return jsonify({'job_backend': jb, 'counts': counts})
 
 
 
@@ -1290,6 +1319,71 @@ def api_qa():
         'clues': clue_hits,
         'case_id': case_id
     })
+
+
+@app.post('/api/chat')
+def api_chat():
+    """Streaming chat-like endpoint.
+
+    Body JSON: { question: str, case_id?: str }
+    Returns: text/plain stream of the answer, chunked.
+    """
+    data = request.get_json(silent=True) or {}
+    q = data.get('question') or data.get('q')
+    case_id = data.get('case_id') or 'default'
+    if not q:
+        return jsonify({'error': 'question required'}), 400
+    # Build compact context (reuse QA logic)
+    try:
+        k = 5
+        with get_conn() as conn:
+            chunks = list_chunks(conn, case_id, limit=5000)
+        ranked_chunks = []
+        if chunks and any(c.get('embedding') for c in chunks):
+            try:
+                from sentence_transformers import SentenceTransformer  # type: ignore
+                _model_q = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+                q_vec = _model_q.encode([q], normalize_embeddings=True)[0]  # type: ignore
+                import numpy as np
+                def cos(a,b):
+                    a=np.array(a); b=np.array(b)
+                    return float((a@b)/( (a.dot(a)**0.5)*(b.dot(b)**0.5)+1e-9 ))
+                scored = []
+                for c in chunks:
+                    emb = c.get('embedding')
+                    if not emb: continue
+                    try:
+                        score = cos(q_vec, emb)
+                    except Exception:
+                        score = 0.0
+                    scored.append((score, c))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                ranked_chunks = [ {'text': sc[1]['text']} for sc in scored[:k] ]
+            except Exception:
+                ranked_chunks = []
+        clue_hits = semantic_search(q, k=k, case_id=case_id)
+        context_lines = []
+        for ch in ranked_chunks[:5]:
+            context_lines.append(f"CHUNK: {ch['text']}")
+        for c in clue_hits[:5]:
+            context_lines.append(f"CLUE: {c['text']}")
+        context_text = "\n".join(context_lines)
+    except Exception:
+        context_text = ''
+
+    def _gen():
+        try:
+            ans = answer_with_context(q, context_text)
+            text = ans.get('answer','') or ''
+        except Exception:
+            text = 'Unable to generate answer right now.'
+        step = 64
+        for i in range(0, len(text), step):
+            yield text[i:i+step]
+        if not text.endswith('\n'):
+            yield '\n'
+
+    return Response(stream_with_context(_gen()), mimetype='text/plain; charset=utf-8')
 
 
 @app.get('/api/timeline')

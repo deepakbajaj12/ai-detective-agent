@@ -11,6 +11,7 @@ import ThemeModeToggle from './ThemeModeToggle';
 import BuildCircleOutlinedIcon from '@mui/icons-material/BuildCircleOutlined';
 import JobsPanel from './JobsPanel';
 import SummarizeIcon from '@mui/icons-material/Summarize';
+import ChatIcon from '@mui/icons-material/Chat';
 
 // Legacy headerStyle removed (LogoTitle supplies styling)
 export default function Header({ mode, onToggleMode }) {
@@ -31,6 +32,7 @@ export default function Header({ mode, onToggleMode }) {
           <Button color="inherit" component={RouterLink} to="/ingest">Ingest PDF</Button>
           <Button color="inherit" component={RouterLink} to="/metrics">Metrics</Button>
           <Button color="inherit" component={RouterLink} to="/qa">QA</Button>
+          <Button color="inherit" startIcon={<ChatIcon />} component={RouterLink} to="/chat">Chat</Button>
           <Button color="inherit" startIcon={<SummarizeIcon />} component={RouterLink} to="/analysis">Analysis</Button>
           <Button color="inherit" component={RouterLink} to="/timeline">Timeline</Button>
           <Button color="inherit" component={RouterLink} to="/graph">Graph</Button>
