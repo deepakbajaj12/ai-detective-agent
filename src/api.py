@@ -1,3 +1,4 @@
+from src.gen_ai import generate_case_analysis, answer_with_context
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any
@@ -1251,25 +1252,40 @@ def api_qa():
             ranked_chunks = []
     # Clue results
     clue_hits = semantic_search(q, k=k, case_id=case_id)
-    # Heuristic answer: concatenate top lines containing overlapping keywords
-    key_terms = [w for w in q.split() if len(w) > 3]
-    answer_parts = []
-    for ch in ranked_chunks:
-        if any(t.lower() in ch['text'].lower() for t in key_terms):
-            snippet = ch['text'][:180].replace('\n',' ')
-            answer_parts.append(snippet + ('...' if len(ch['text'])>180 else ''))
-            if len(answer_parts) >= 3:
-                break
-    if not answer_parts:
-        for c in clue_hits:
-            if any(t.lower() in c['text'].lower() for t in key_terms):
-                answer_parts.append(c['text'][:160] + ('...' if len(c['text'])>160 else ''))
+    # Compose context from chunks and clues (top few for token budget)
+    context_lines = []
+    for ch in ranked_chunks[:5]:
+        context_lines.append(f"CHUNK: {ch['text']}")
+    for c in clue_hits[:5]:
+        context_lines.append(f"CLUE: {c['text']}")
+    context_text = "\n".join(context_lines)
+    # Try LLM-backed answer
+    try:
+        ans = answer_with_context(q, context_text)
+        backend = ans.get('backend','heuristic')
+        answer = ans.get('answer','')
+    except Exception:
+        backend = 'heuristic'
+        # Heuristic: overlap-based extraction as fallback
+        key_terms = [w for w in q.split() if len(w) > 3]
+        answer_parts = []
+        for ch in ranked_chunks:
+            if any(t.lower() in ch['text'].lower() for t in key_terms):
+                snippet = ch['text'][:180].replace('\n',' ')
+                answer_parts.append(snippet + ('...' if len(ch['text'])>180 else ''))
                 if len(answer_parts) >= 3:
                     break
-    answer = ' '.join(answer_parts) if answer_parts else 'Insufficient context to answer definitively.'
+        if not answer_parts:
+            for c in clue_hits:
+                if any(t.lower() in c['text'].lower() for t in key_terms):
+                    answer_parts.append(c['text'][:160] + ('...' if len(c['text'])>160 else ''))
+                    if len(answer_parts) >= 3:
+                        break
+        answer = ' '.join(answer_parts) if answer_parts else 'Insufficient context to answer definitively.'
     return jsonify({
         'question': q,
         'answer': answer,
+        'backend': backend,
         'chunks': ranked_chunks,
         'clues': clue_hits,
         'case_id': case_id

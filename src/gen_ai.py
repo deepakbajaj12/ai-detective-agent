@@ -161,4 +161,42 @@ DATA CONTEXT:\n{_truncate(base_context, 9000)}
     }
 
 
-__all__ = ["generate_case_analysis"]
+def answer_with_context(question: str, context: str, style: str = "brief") -> Dict[str, Any]:
+    """Answer a question grounded in provided context.
+
+    Tiered strategy like generate_case_analysis:
+      1) If OPENAI available -> chat completion with clear grounding instruction
+      2) Else if transformers available -> summarize context and append heuristic
+      3) Else -> heuristic extraction from context
+    """
+    style = style.lower().strip()
+    style_tag = style if style in {"brief","detailed"} else "brief"
+    prompt = f"""
+You are an AI investigator. Using ONLY the supplied CONTEXT, answer the QUESTION concisely in a {style_tag} style.
+If the answer is uncertain, say so explicitly and briefly.
+
+CONTEXT:\n{_truncate(context, 9000)}
+
+QUESTION: {question}
+""".strip()
+    if _openai_available():
+        return { 'backend': 'openai', 'answer': _call_openai(prompt) }
+    elif _transformers_available():
+        summary = _hf_summarize(context)
+        tail = f"Heuristic extraction: key terms -> {', '.join([w for w in question.split() if len(w)>3][:6])}"
+        return { 'backend': 'transformers', 'answer': summary + "\n\n" + tail }
+    else:
+        # naive heuristic: pick lines containing overlapping terms
+        q_terms = [w.lower() for w in question.split() if len(w) > 3]
+        lines = [ln.strip() for ln in context.splitlines() if ln.strip()]
+        hits = []
+        for ln in lines:
+            if any(t in ln.lower() for t in q_terms):
+                hits.append(ln[:180])
+                if len(hits) >= 3:
+                    break
+        ans = ' '.join(hits) if hits else 'Insufficient context to answer definitively.'
+        return { 'backend': 'heuristic', 'answer': ans }
+
+
+__all__ = ["generate_case_analysis", "answer_with_context"]
