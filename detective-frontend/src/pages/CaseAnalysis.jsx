@@ -30,6 +30,34 @@ export default function CaseAnalysis(){
       setLoading(false);
     }
   };
+
+  const downloadPdf = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${process.env.REACT_APP_API_BASE || 'http://localhost:5000'}/api/analysis/pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ case_id: caseId, style })
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `case_${caseId}_analysis.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setReport({ error: e.message || String(e) });
+    } finally {
+      setLoading(false);
+    }
+  };
   return (
     <Stack spacing={2}>
       <Typography variant="h4" sx={{ fontFamily:'Playfair Display, serif' }}>Case Analysis</Typography>
@@ -40,6 +68,7 @@ export default function CaseAnalysis(){
           <ToggleButton value="detailed">Detailed</ToggleButton>
         </ToggleButtonGroup>
         <Button variant="contained" onClick={run} disabled={loading}>Generate</Button>
+        <Button variant="outlined" onClick={downloadPdf} disabled={loading}>Download PDF</Button>
       </Stack>
       {loading && <LinearProgress />}
       {report && report.error && <Typography color="error">{report.error}</Typography>}

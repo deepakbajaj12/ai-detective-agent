@@ -41,6 +41,8 @@ def start_job(job_type: str, target: Callable[..., Any] | None, *args, **kwargs)
             jid = rq_jobs.start_index_refresh(*args, **kwargs)  # type: ignore
         elif job_type == 'transformer_train':
             jid = rq_jobs.start_transformer_train(*args, **kwargs)  # type: ignore
+        elif job_type == 'embeddings_refresh':
+            jid = rq_jobs.start_embeddings_refresh()  # type: ignore
         else:
             raise ValueError(f"Unknown job_type for RQ: {job_type}")
         if not jid:
@@ -85,4 +87,4 @@ def cancel_job(job_id: str) -> bool:
 
 
 # Re-export task functions for convenience
-from .jobs import task_transformer_train, task_index_refresh  # noqa: E402,F401
+from .jobs import task_transformer_train, task_index_refresh, task_embeddings_refresh  # noqa: E402,F401

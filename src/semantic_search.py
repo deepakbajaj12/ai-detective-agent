@@ -19,9 +19,17 @@ except Exception:
 _lock = threading.Lock()
 _indexes: Dict[str, Dict[str, Any]] = {}
 _embedding_mode: Optional[str] = None  # 'dense' | 'tfidf'
+# Embedding metrics (lightweight, in-memory)
+_metrics: Dict[str, Any] = {
+    'total_cases_indexed': 0,
+    'total_clues_indexed': 0,
+    'last_refresh_started': None,
+    'last_refresh_duration_ms': None,
+    'backend': None,
+}
 
 try:  # Attempt dense embedding backend
-    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import SentenceTransformer  # type: ignore
     _model: Optional[SentenceTransformer] = None
     _embedding_mode = 'dense'
 except Exception:  # Fallback to TF-IDF
@@ -68,8 +76,14 @@ def build_index(case_id: str = 'default', force: bool = False) -> None:
                 "backend": _embedding_mode,
                 "vectorizer": vectorizer
             }
+            _metrics['total_cases_indexed'] = len(_indexes)
+            _metrics['total_clues_indexed'] = sum(len(v.get('clues') or []) for v in _indexes.values())
+            _metrics['backend'] = _embedding_mode
             return
         _indexes[case_id] = {"clues": clues, "vectors": vectors, "backend": _embedding_mode}
+        _metrics['total_cases_indexed'] = len(_indexes)
+        _metrics['total_clues_indexed'] = sum(len(v.get('clues') or []) for v in _indexes.values())
+        _metrics['backend'] = _embedding_mode
 
 
 def search(query: str, k: int = 5, case_id: str = 'default') -> List[Dict[str, Any]]:
@@ -110,8 +124,38 @@ def search(query: str, k: int = 5, case_id: str = 'default') -> List[Dict[str, A
 
 
 def refresh(case_id: str = 'default') -> None:
+    import time
+    start = time.time()
+    if _metrics['last_refresh_started'] is None:
+        _metrics['last_refresh_started'] = start
     build_index(case_id, force=True)
+    dur = (time.time() - start) * 1000.0
+    _metrics['last_refresh_duration_ms'] = dur
 
 
 def backend_mode() -> str:
     return _embedding_mode or 'unknown'
+
+
+def refresh_all(case_ids: List[str]) -> Dict[str, Any]:  # utility for job task
+    import time
+    started = time.time()
+    for cid in case_ids:
+        refresh(cid)
+    total_ms = (time.time() - started) * 1000.0
+    return {
+        'cases': len(case_ids),
+        'duration_ms': total_ms,
+        'backend': backend_mode(),
+        'total_clues_indexed': _metrics.get('total_clues_indexed')
+    }
+
+
+def get_embedding_metrics() -> Dict[str, Any]:
+    return {
+        'backend': _metrics.get('backend'),
+        'total_cases_indexed': _metrics.get('total_cases_indexed'),
+        'total_clues_indexed': _metrics.get('total_clues_indexed'),
+        'last_refresh_started': _metrics.get('last_refresh_started'),
+        'last_refresh_duration_ms': _metrics.get('last_refresh_duration_ms'),
+    }

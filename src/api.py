@@ -1,9 +1,8 @@
-from src.gen_ai import generate_case_analysis, answer_with_context
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any
 
-from flask import Flask, jsonify, request, Response, stream_with_context
+from flask import Flask, jsonify, request, Response, stream_with_context, send_file
 from flask_cors import CORS
 
 try:  # package import (preferred when running `python -m src.api`)
@@ -23,22 +22,23 @@ try:
 except Exception:  # pragma: no cover
     load_transformer = None  # type: ignore
 try:
-    from src.semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend
+    from src.semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend, get_embedding_metrics as semantic_embedding_metrics
     from src.db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot
 except ImportError:  # fallback
-    from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend  # type: ignore
+    from semantic_search import search as semantic_search, refresh as semantic_refresh, backend_mode as semantic_backend, get_embedding_metrics as semantic_embedding_metrics  # type: ignore
     from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot  # type: ignore
 try:
     from src.graph_builder import build_graph  # type: ignore
-    from src.gen_ai import generate_case_analysis  # type: ignore
+    from src.gen_ai import generate_case_analysis, answer_with_context, stream_answer  # type: ignore
+    from src.pdf_generator import save_report as save_pdf_report  # type: ignore
 except Exception:
     from graph_builder import build_graph  # type: ignore
-    from gen_ai import generate_case_analysis  # type: ignore
+    from gen_ai import generate_case_analysis, answer_with_context, stream_answer  # type: ignore
 try:
-    from src.jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh  # type: ignore
+    from src.jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh, task_embeddings_refresh  # type: ignore
     from src.jobs_backend import backend_mode as job_backend_mode  # type: ignore
 except Exception:
-    from jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh  # type: ignore
+    from jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh, task_embeddings_refresh  # type: ignore
     try:
         from jobs_backend import backend_mode as job_backend_mode  # type: ignore
     except Exception:
@@ -90,7 +90,8 @@ def index():
             "POST /api/auth/login": "Get an API token",
             "GET /api/metrics": "System + model overview metrics",
             "POST /api/jobs/transformer_train": "Start background transformer training (optional deps)",
-            "POST /api/jobs/index_refresh": "Rebuild semantic index in background",
+            "POST /api/jobs/index_refresh": "Rebuild semantic index for a single case in background",
+            "POST /api/jobs/embeddings_refresh": "Rebuild embeddings/indexes for ALL cases sequentially",
             "GET /api/system": "System info (job backend mode, counts)",
             "GET /api/jobs": "List recent jobs (durable if Redis/RQ enabled)",
             "GET /api/jobs/<id>": "Poll job status",
@@ -115,6 +116,19 @@ def api_job_index_refresh():
     data = request.get_json(silent=True) or {}
     case_id = data.get('case_id') or 'default'
     job_id = start_job('index_refresh', task_index_refresh, case_id)
+    return jsonify({'ok': True, 'job_id': job_id}), 202
+
+
+@app.post('/api/jobs/embeddings_refresh')
+def api_job_embeddings_refresh():
+    """Trigger a global embeddings/index refresh across all cases.
+
+    Background job will iterate through each case and rebuild semantic search indexes,
+    recording per-case durations in the embedding metrics registry.
+    Returns 202 with a job id that can be polled at /api/jobs/<id>.
+    """
+    # memory backend: we pass explicit task; RQ backend: job_type mapping ignores target
+    job_id = start_job('embeddings_refresh', task_embeddings_refresh)
     return jsonify({'ok': True, 'job_id': job_id}), 202
 
 
@@ -226,6 +240,23 @@ def api_login():
     return jsonify({'ok': True, 'token': tok})
 
 
+@app.get('/api/auth/me')
+@auth_required
+def api_auth_me():
+    """Return basic user info for the bearer token (id, username, role)."""
+    try:
+        user = getattr(request, 'user', None)
+        if not user:
+            return jsonify({'error': 'no user context'}), 401
+        return jsonify({'ok': True, 'user': {
+            'id': user.get('id'),
+            'username': user.get('username'),
+            'role': user.get('role')
+        }})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ---- Helper: lightweight token weighting (heuristic) ----
 def _compute_token_weights(text: str, top_n: int = 10) -> dict[str, float]:
     import re, math
@@ -247,7 +278,7 @@ def _compute_token_weights(text: str, top_n: int = 10) -> dict[str, float]:
 # ---- Transformer attention based token attribution (fallback to heuristic) ----
 def _attention_token_weights(text: str, tokenizer, model, top_n: int = 10) -> dict[str, float]:  # pragma: no cover (runtime only)
     try:
-        import torch  # local import to avoid mandatory dependency if transformer unused
+        import torch  # type: ignore  # local import to avoid mandatory dependency if transformer unused
         enc = tokenizer(text, truncation=True, padding=False, max_length=128, return_tensors='pt')
         with torch.no_grad():
             out = model(**enc, output_attentions=True)
@@ -1071,6 +1102,39 @@ def api_case_analysis():
     return jsonify(report)
 
 
+@app.post('/api/analysis/pdf')
+def api_case_analysis_pdf():
+    """Generate a PDF report for a case analysis and return it as an attachment.
+
+    Body JSON: { case_id?: str, style?: 'brief'|'detailed' }
+    """
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id') or request.args.get('case_id') or 'default'
+    style = data.get('style', 'brief')
+    with get_conn() as conn:
+        if case_id and not get_case(conn, case_id):
+            return jsonify({'error': 'case not found'}), 404
+        suspects = db_list_suspects(conn, case_id)
+        clues_rows = db_list_clues(conn, case_id=case_id)
+        clues = [r['text'] for r in clues_rows]
+    report = generate_case_analysis(case_id, clues, suspects, style=style)
+    # Prepare printable deductions: split report text into lines for PDF
+    deductions = (report.get('report') or '').splitlines()
+    out_dir = BASE_DIR / 'outputs'
+    out_dir.mkdir(exist_ok=True)
+    import time
+    fname = f"case_{case_id}_analysis_{int(time.time())}.pdf"
+    out_path = out_dir / fname
+    try:
+        save_pdf_report(clues, deductions, str(out_path))
+    except Exception as e:
+        return jsonify({'error': f'pdf generation failed: {e}'}), 500
+    try:
+        return send_file(str(out_path), as_attachment=True, download_name=fname, mimetype='application/pdf')
+    except Exception as e:
+        return jsonify({'error': f'failed to send pdf: {e}'}), 500
+
+
 @app.post('/api/documents/upload')
 @auth_required
 def api_upload_document():
@@ -1373,15 +1437,10 @@ def api_chat():
 
     def _gen():
         try:
-            ans = answer_with_context(q, context_text)
-            text = ans.get('answer','') or ''
+            for chunk in stream_answer(q, context_text):
+                yield chunk
         except Exception:
-            text = 'Unable to generate answer right now.'
-        step = 64
-        for i in range(0, len(text), step):
-            yield text[i:i+step]
-        if not text.endswith('\n'):
-            yield '\n'
+            yield 'Unable to generate answer right now.\n'
 
     return Response(stream_with_context(_gen()), mimetype='text/plain; charset=utf-8')
 
@@ -1657,6 +1716,11 @@ def api_metrics():
         backend = 'transformer' if model else 'logreg'
     except Exception:
         backend = 'logreg'
+    # Embedding / semantic index metrics (best-effort; absent if not initialized yet)
+    try:
+        emb_metrics = semantic_embedding_metrics()
+    except Exception:
+        emb_metrics = None
     return jsonify({
         'counts': counts,
         'scores': score_dist,
@@ -1669,6 +1733,7 @@ def api_metrics():
             'alpha_default': 0.7,
             'offense_beta_default': 0.1
         },
+        'embeddings': emb_metrics,
         'data_freshness': ls,
         'case_id': case_id or 'ALL'
     })

@@ -1,0 +1,47 @@
+version: '3.9'
+services:
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - AI_DETECTIVE_PORT=5000
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: ["python", "-m", "src.api"]
+    ports:
+      - "5000:5000"
+    depends_on:
+      - redis
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: ["python", "-m", "rq", "worker", "default"]
+    depends_on:
+      - redis
+  frontend:
+    build:
+      context: ./detective-frontend
+      dockerfile: Dockerfile
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WDS_SOCKET_PORT=3000
+      - REACT_APP_API_BASE=http://localhost:5000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api

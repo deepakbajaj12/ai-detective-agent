@@ -73,6 +73,15 @@ def task_transformer_train_rq(training_json: str) -> Dict[str, Any]:
     return result
 
 
+def task_embeddings_refresh_rq() -> Dict[str, Any]:
+    from .jobs import task_embeddings_refresh
+    set_prog = _make_set_progress()
+    set_prog(3, 'start embeddings refresh')
+    result = task_embeddings_refresh(set_prog)
+    set_prog(100, 'done')
+    return result
+
+
 # ---- Public API used by jobs_backend when RQ is enabled ----
 
 def start_index_refresh(case_id: str = 'default') -> Optional[str]:
@@ -90,6 +99,15 @@ def start_transformer_train(training_json: str) -> Optional[str]:
         return None
     q = _queue(conn)
     job = q.enqueue(task_transformer_train_rq, training_json, job_timeout=24*3600)
+    return job.get_id()
+
+
+def start_embeddings_refresh() -> Optional[str]:
+    conn = _redis_connection()
+    if not conn:
+        return None
+    q = _queue(conn)
+    job = q.enqueue(task_embeddings_refresh_rq, job_timeout=3600)
     return job.get_id()
 
 

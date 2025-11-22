@@ -11,6 +11,7 @@ import CardContent from '@mui/material/CardContent';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Switch from '@mui/material/Switch';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import { apiFetch } from '../apiBase';
 
 export default function DocumentIngest() {
   const [file, setFile] = useState(null);
@@ -19,19 +20,25 @@ export default function DocumentIngest() {
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
 
-  const handleUpload = () => {
-    if(!file) return;
+  const handleUpload = async () => {
+    if (!file) { setError('Select a PDF first.'); return; }
     setUploading(true); setError(null); setResult(null);
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('auto_clues', autoClues ? '1' : '0');
-    fetch('/api/documents/upload', { method:'POST', body: fd })
-      .then(r => r.json())
-      .then(data => {
-        if(data.error) setError(data.error); else setResult(data);
-      })
-      .catch(e => setError(e.message))
-      .finally(()=> setUploading(false));
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('auto_clues', autoClues ? '1' : '0');
+      // Prefer apiFetch for consistent headers + error surfaces
+      const data = await apiFetch('/api/documents/upload', { method: 'POST', body: fd });
+      if (data.error) setError(data.error); else setResult(data);
+    } catch (e) {
+      if (e.message && e.message.includes('401')) {
+        setError('Login required: please authenticate first (use Login page).');
+      } else {
+        setError(e.message || 'Upload failed');
+      }
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
@@ -49,6 +56,9 @@ export default function DocumentIngest() {
         <Button variant='contained' onClick={handleUpload} disabled={!file || uploading}>Upload & Analyze</Button>
         {uploading && <LinearProgress />}
         {error && <Alert severity='error'>{error}</Alert>}
+        {!error && !uploading && !result && (
+          <Typography variant='caption' color='text.secondary'>Protected endpoint: you must login to upload. Use the Login button if you see an auth error.</Typography>
+        )}
         {result && (
           <Card>
             <CardContent>

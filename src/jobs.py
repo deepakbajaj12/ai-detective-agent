@@ -96,3 +96,35 @@ def task_index_refresh(set_progress: Callable[[int, Optional[str]], None], case_
     set_progress(100, 'done')
     return {'ok': True, 'case_id': case_id}
 
+
+def task_embeddings_refresh(set_progress: Callable[[int, Optional[str]], None]) -> Dict[str, Any]:
+    """Refresh embeddings for all cases (rebuild indexes sequentially)."""
+    try:
+        from .db import get_conn, list_cases
+        from .semantic_search import refresh_all
+    except Exception:
+        from db import get_conn, list_cases  # type: ignore
+        from semantic_search import refresh_all  # type: ignore
+    set_progress(5, 'enumerating cases')
+    with get_conn() as conn:
+        cases = list_cases(conn)
+    case_ids = [c['id'] for c in cases] or ['default']
+    total = len(case_ids)
+    if total == 0:
+        set_progress(100, 'no cases found')
+        return {'ok': True, 'cases': 0}
+    # Iterate and update progress
+    for i, cid in enumerate(case_ids, start=1):
+        pct = int(5 + (90 * (i/total)))
+        set_progress(pct, f'refresh {cid}')
+        try:
+            # reuse single-case refresh for more granular duration tracking
+            from .semantic_search import refresh  # type: ignore
+            refresh(cid)
+        except Exception:
+            continue
+    from .semantic_search import get_embedding_metrics  # type: ignore
+    metrics = get_embedding_metrics()
+    set_progress(100, 'embeddings refreshed')
+    return {'ok': True, 'cases': total, 'metrics': metrics}
+

@@ -16,6 +16,7 @@ import TimelinePage from './pages/TimelinePage';
 import GraphPage from './pages/GraphPage';
 import CaseAnalysis from './pages/CaseAnalysis';
 import ChatPage from './pages/ChatPage';
+import LoginPage from './pages/LoginPage';
 import { buildTheme } from './theme';
 
 function App() {
@@ -45,6 +46,7 @@ function App() {
               <Route path="/analysis" element={<CaseAnalysis />} />
               <Route path="/timeline" element={<TimelinePage />} />
               <Route path="/graph" element={<GraphPage />} />
+              <Route path="/login" element={<LoginPage />} />
             </Routes>
           </Container>
         </ErrorBoundary>

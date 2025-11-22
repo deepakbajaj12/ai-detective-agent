@@ -1,4 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import Tooltip from '@mui/material/Tooltip';
+import Chip from '@mui/material/Chip';
+import { isAuthenticated } from '../apiBase';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
 import Button from '@mui/material/Button';
@@ -16,6 +19,17 @@ import ChatIcon from '@mui/icons-material/Chat';
 // Legacy headerStyle removed (LogoTitle supplies styling)
 export default function Header({ mode, onToggleMode }) {
   const [jobsOpen, setJobsOpen] = React.useState(false);
+  const [authToken, setAuthToken] = useState(null);
+  useEffect(()=> {
+  const tk = localStorage.getItem('auth_token');
+  setAuthToken(tk);
+    const int = setInterval(()=> {
+      const cur = localStorage.getItem('auth_token');
+      if(cur !== authToken) setAuthToken(cur);
+    }, 1500);
+    return ()=> clearInterval(int);
+  }, [authToken]);
+  const logout = () => { localStorage.removeItem('auth_token'); setAuthToken(null); };
   return (
     <AppBar position="sticky" color="primary">
       <Toolbar>
@@ -38,6 +52,11 @@ export default function Header({ mode, onToggleMode }) {
           <Button color="inherit" component={RouterLink} to="/graph">Graph</Button>
           <Button color="inherit" startIcon={<BuildCircleOutlinedIcon />} onClick={()=>setJobsOpen(true)}>Jobs</Button>
           <ThemeModeToggle mode={mode} onToggle={onToggleMode} />
+          <Tooltip title={authToken ? 'Authenticated' : 'Not logged in'}>
+            <Chip size="small" label={authToken ? 'AUTH' : 'ANON'} color={authToken ? 'success' : 'default'} />
+          </Tooltip>
+          {!authToken && <Button color="inherit" component={RouterLink} to="/login">Login</Button>}
+          {authToken && <Button color="inherit" onClick={logout}>Logout</Button>}
         </Stack>
       </Toolbar>
       <JobsPanel open={jobsOpen} onClose={()=>setJobsOpen(false)} />
