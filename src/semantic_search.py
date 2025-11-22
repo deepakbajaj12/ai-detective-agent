@@ -12,9 +12,9 @@ import math
 import threading
 
 try:  # support both package and script execution
-    from src.db import get_conn, list_clues  # type: ignore
+    from src.db import get_conn, list_clues, upsert_clue_embedding, list_case_embeddings  # type: ignore
 except Exception:
-    from db import get_conn, list_clues  # type: ignore
+    from db import get_conn, list_clues, upsert_clue_embedding, list_case_embeddings  # type: ignore
 
 _lock = threading.Lock()
 _indexes: Dict[str, Dict[str, Any]] = {}
@@ -53,34 +53,67 @@ def _l2_normalize(vecs):
 
 
 def build_index(case_id: str = 'default', force: bool = False) -> None:
-    """Build or rebuild the in-memory index for a case."""
+    """Build or rebuild the in-memory index for a case.
+
+    Persistence strategy:
+      - If dense backend and stored embeddings exist & count matches clues, load them instead of recomputing.
+      - After computing fresh dense embeddings, upsert each embedding row to the clue_embeddings table.
+      - TF-IDF backend is transient (not persisted) due to vocabulary dependence; recomputed each build.
+    """
     with _lock:
         if not force and case_id in _indexes:
             return
         with get_conn() as conn:
             clues = list_clues(conn, case_id=case_id)
+            stored = list_case_embeddings(conn, case_id) if _embedding_mode == 'dense' else []
         texts = [c['text'] for c in clues]
         if not texts:
             _indexes[case_id] = {"clues": [], "vectors": None, "backend": _embedding_mode}
             return
         if _embedding_mode == 'dense':
             _ensure_model()
+            # Attempt reuse
+            if stored and len(stored) == len(clues):
+                # Ensure ordering by clue_id aligns with clues list ordering (both ascending id assumption)
+                # Map by clue_id for safety
+                emb_map = {r['clue_id']: r.get('embedding') for r in stored}
+                vectors = []
+                for c in clues:
+                    v = emb_map.get(c['id'])
+                    if v is None:
+                        vectors = []
+                        break
+                    vectors.append(v)
+                if vectors:
+                    import numpy as np
+                    vectors = np.array(vectors)
+                    _indexes[case_id] = {"clues": clues, "vectors": vectors, "backend": _embedding_mode}
+                    _metrics['total_cases_indexed'] = len(_indexes)
+                    _metrics['total_clues_indexed'] = sum(len(v.get('clues') or []) for v in _indexes.values())
+                    _metrics['backend'] = _embedding_mode
+                    return
+            # Fresh compute
             vectors = _model.encode(texts, normalize_embeddings=True)  # type: ignore
-        else:  # TF-IDF fallback
+            # Persist each embedding row (list form)
+            try:
+                with get_conn() as conn:
+                    for emb, clue in zip(vectors.tolist(), clues):  # type: ignore
+                        try:
+                            upsert_clue_embedding(conn, clue['id'], case_id, _embedding_mode or 'dense', emb)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            _indexes[case_id] = {"clues": clues, "vectors": vectors, "backend": _embedding_mode}
+        else:  # TF-IDF fallback (transient)
             vectorizer = TfidfVectorizer(ngram_range=(1,2), min_df=1)
             mat = vectorizer.fit_transform(texts)
-            # Store components to compute query vector
             _indexes[case_id] = {
                 "clues": clues,
                 "vectors": mat,
                 "backend": _embedding_mode,
                 "vectorizer": vectorizer
             }
-            _metrics['total_cases_indexed'] = len(_indexes)
-            _metrics['total_clues_indexed'] = sum(len(v.get('clues') or []) for v in _indexes.values())
-            _metrics['backend'] = _embedding_mode
-            return
-        _indexes[case_id] = {"clues": clues, "vectors": vectors, "backend": _embedding_mode}
         _metrics['total_cases_indexed'] = len(_indexes)
         _metrics['total_clues_indexed'] = sum(len(v.get('clues') or []) for v in _indexes.values())
         _metrics['backend'] = _embedding_mode

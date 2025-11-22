@@ -41,6 +41,18 @@ transformers>=4.40  # for advanced transformer-based suspect classifier (option 
 torch>=2.2  # CPU version is fine; enables DistilBERT fine-tuning
 
 ##########################
+# Auth / Security
+##########################
+PyJWT>=2.9
+passlib>=1.7  # optional hashing utilities
+
+##########################
+# Scheduling / Monitoring
+##########################
+APScheduler>=3.10
+prometheus-client>=0.20
+
+##########################
 # Optional DB connectors (only if you actually use Postgres/MySQL)
 ##########################
 psycopg2-binary>=2.9 ; platform_system != 'Windows' or platform_machine != 'ARM64'

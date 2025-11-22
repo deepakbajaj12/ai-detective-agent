@@ -189,6 +189,17 @@ def init_db():
             FOREIGN KEY(suspect_id) REFERENCES suspects(id) ON DELETE CASCADE
         )"""
     )
+    # Persistent clue embeddings (optional dense vectors; stored as JSON array for portability)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS clue_embeddings (
+            clue_id INTEGER PRIMARY KEY REFERENCES clues(id) ON DELETE CASCADE,
+            case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+            backend TEXT, -- dense | tfidf | other
+            embedding TEXT, -- JSON serialized list[float]
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
     conn.commit()
     # Attempt to add scoring columns if they don't exist
     try:
@@ -647,6 +658,30 @@ def fetch_attributions(conn: sqlite3.Connection, suspect_id: str, case_id: str) 
         (suspect_id, case_id)
     )
     rows = [dict(r) for r in cur.fetchall()]
+    return rows
+
+# ---- Persistent Embeddings ----
+def upsert_clue_embedding(conn: sqlite3.Connection, clue_id: int, case_id: str, backend: str, embedding: list[float]):
+    cur = conn.cursor()
+    import json as _json
+    emb_json = _json.dumps(embedding)
+    # Try update then insert if missing
+    cur.execute("UPDATE clue_embeddings SET embedding=?, backend=?, updated_at=CURRENT_TIMESTAMP WHERE clue_id=?", (emb_json, backend, clue_id))
+    if cur.rowcount == 0:
+        cur.execute("INSERT INTO clue_embeddings(clue_id, case_id, backend, embedding) VALUES (?,?,?,?)", (clue_id, case_id, backend, emb_json))
+    conn.commit()
+
+def list_case_embeddings(conn: sqlite3.Connection, case_id: str) -> list[dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM clue_embeddings WHERE case_id=? ORDER BY clue_id ASC", (case_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    import json as _json
+    for r in rows:
+        if r.get('embedding'):
+            try:
+                r['embedding'] = _json.loads(r['embedding'])
+            except Exception:
+                r['embedding'] = None
     return rows
 
 # ---- RAG Document Chunks ----

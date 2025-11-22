@@ -183,21 +183,55 @@ def api_system():
 
 
 # ---- Auth Utilities ----
-import hashlib, secrets
+import hashlib, secrets, os, time
+import jwt  # PyJWT
 from functools import wraps
 
 def _hash_password(pw: str) -> str:
+    # Retain legacy SHA256 for existing users; passlib could be integrated later.
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()
+
+JWT_SECRET = os.environ.get('AI_DETECTIVE_JWT_SECRET') or secrets.token_hex(32)
+JWT_ALG = 'HS256'
+JWT_EXP_SECONDS = int(os.environ.get('AI_DETECTIVE_JWT_EXP', '86400'))  # 24h default
+
+def _issue_jwt(user: dict) -> str:
+    payload = {
+        'sub': user.get('id'),
+        'username': user.get('username'),
+        'role': user.get('role'),
+        'iat': int(time.time()),
+        'exp': int(time.time()) + JWT_EXP_SECONDS
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+def _decode_jwt(token: str) -> dict | None:
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except Exception:
+        return None
 
 
 def auth_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if token and token.lower().startswith('bearer '):
-            token = token.split(None,1)[1]
+        header = request.headers.get('Authorization')
+        token = None
+        if header and header.lower().startswith('bearer '):
+            token = header.split(None,1)[1]
         if not token:
             return jsonify({'error': 'auth required'}), 401
+        # Try JWT first
+        claims = _decode_jwt(token)
+        if claims:
+            user = {
+                'id': claims.get('sub'),
+                'username': claims.get('username'),
+                'role': claims.get('role')
+            }
+            request.user = user  # type: ignore
+            return fn(*args, **kwargs)
+        # Fallback legacy token lookup
         with get_conn() as conn:
             user = get_user_by_token(conn, token)
         if not user:
@@ -205,6 +239,17 @@ def auth_required(fn):
         request.user = user  # type: ignore
         return fn(*args, **kwargs)
     return wrapper
+
+def role_required(*roles: str):
+    def deco(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            user = getattr(request, 'user', None)
+            if not user or user.get('role') not in roles:
+                return jsonify({'error': 'forbidden'}), 403
+            return fn(*args, **kwargs)
+        return wrapper
+    return deco
 
 
 @app.post('/api/auth/register')
@@ -218,9 +263,10 @@ def api_register():
         if find_user(conn, username):
             return jsonify({'error': 'username exists'}), 409
         uid = create_user(conn, username, _hash_password(password), role='user')
-        tok = secrets.token_hex(16)
-        create_token(conn, uid, tok)
-    return jsonify({'ok': True, 'token': tok})
+        # Issue JWT (legacy token creation skipped, but can keep compatibility if needed)
+        user = {'id': uid, 'username': username, 'role': 'user'}
+        jw = _issue_jwt(user)
+    return jsonify({'ok': True, 'jwt': jw})
 
 
 @app.post('/api/auth/login')
@@ -234,10 +280,8 @@ def api_login():
         user = find_user(conn, username)
         if not user or user['password_hash'] != _hash_password(password):
             return jsonify({'error': 'invalid credentials'}), 401
-        # issue new token each login (simplest strategy)
-        tok = secrets.token_hex(16)
-        create_token(conn, user['id'], tok)
-    return jsonify({'ok': True, 'token': tok})
+        jw = _issue_jwt(user)
+    return jsonify({'ok': True, 'jwt': jw})
 
 
 @app.get('/api/auth/me')
@@ -1739,6 +1783,42 @@ def api_metrics():
     })
 
 
+@app.get('/prometheus/metrics')
+def prometheus_metrics():  # lightweight export without global registry instrumentation
+    """Expose selected metrics in Prometheus text format.
+
+    For full instrumentation integrate prometheus_client and counters; this is a minimal snapshot.
+    """
+    lines = []
+    def emit(name: str, val: Any, help_text: str):
+        if val is None:
+            return
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} gauge")
+        try:
+            lines.append(f"{name} {float(val)}")
+        except Exception:
+            pass
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) as c FROM suspects")
+            emit('ai_detective_suspects_total', cur.fetchone()['c'], 'Total suspects')
+            cur.execute("SELECT COUNT(*) as c FROM clues")
+            emit('ai_detective_clues_total', cur.fetchone()['c'], 'Total clues')
+            cur.execute("SELECT COUNT(*) as c FROM documents")
+            emit('ai_detective_documents_total', cur.fetchone()['c'], 'Total documents')
+        from src.semantic_search import get_embedding_metrics as _gem  # type: ignore
+        em = _gem()
+        emit('ai_detective_embedding_cases', em.get('total_cases_indexed'), 'Cases with built embedding index')
+        emit('ai_detective_embedding_clues', em.get('total_clues_indexed'), 'Clues indexed in embeddings')
+        emit('ai_detective_last_refresh_ms', em.get('last_refresh_duration_ms'), 'Last embedding refresh duration milliseconds')
+    except Exception:
+        pass
+    body = '\n'.join(lines) + '\n'
+    return Response(body, mimetype='text/plain; charset=utf-8')
+
+
 if __name__ == "__main__":
     # Helpful startup diagnostics: list registered routes once.
     print("\n[AI Detective] Registered routes:")
@@ -1765,4 +1845,17 @@ if __name__ == "__main__":
     import os
     port = int(os.environ.get('AI_DETECTIVE_PORT', '5000'))
     print(f"\n[AI Detective] Starting server on 0.0.0.0:{port} (set AI_DETECTIVE_PORT env var to change)\n")
+    # Optional background scheduler (simple thread) for periodic embeddings refresh
+    if os.environ.get('ENABLE_SCHEDULER','0') in {'1','true','yes'}:
+        import threading
+        from src.jobs_backend import start_job, task_embeddings_refresh  # type: ignore
+        interval = int(os.environ.get('SCHEDULER_REFRESH_INTERVAL_SEC','3600'))
+        def _loop():
+            while True:
+                try:
+                    start_job('embeddings_refresh', task_embeddings_refresh)
+                except Exception:
+                    pass
+                time.sleep(interval)
+        threading.Thread(target=_loop, name='embeddings-scheduler', daemon=True).start()
     app.run(host="0.0.0.0", port=port, debug=True)
