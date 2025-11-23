@@ -86,6 +86,8 @@ def index():
             "POST /api/model/shadow": "Set version as shadow (A/B)",
             "POST /api/model/rollback": "Rollback active to prior version",
             "POST /api/model/infer_ab": "Run A/B inference (active vs shadow)",
+            "GET /api/model/eval/logs": "List recent model A/B inference logs",
+            "GET /api/model/eval/stats": "Aggregate model evaluation statistics",
             "POST /api/snapshots": "Create a ranking snapshot",
             "GET /api/snapshots": "List snapshots",
             "GET /api/snapshots/compare": "Compare two snapshots side-by-side",
@@ -799,6 +801,8 @@ def api_model_infer_ab():
         with get_conn() as conn:
             text = aggregate_clues_text(conn, case_id)
     # active inference uses existing pipeline logic; shadow is illustrative
+    import time
+    t0 = time.time()
     try:
         if not Path(MODEL_PATH).exists():
             train_and_save(BASE_DIR / 'inputs' / 'sample_training.json')
@@ -819,12 +823,47 @@ def api_model_infer_ab():
             shadow_ranked = [(l, max(0.0, min(1.0, s * 0.97))) for l, s in active_ranked]
     except Exception:
         shadow_ranked = []
+    latency_ms = (time.time() - t0) * 1000.0
+    # Persist inference log
+    try:
+        with get_conn() as conn:
+            from src.db import insert_inference_log  # type: ignore
+            insert_inference_log(conn, input_chars=len(text), case_id=case_id, query_type='ab_compare', prompt=text,
+                                 active_backend='logreg', shadow_backend=('transformer' if shadow_ranked else None),
+                                 active_payload=[{'label': l, 'score': s} for l, s in active_ranked],
+                                 shadow_payload=[{'label': l, 'score': s} for l, s in shadow_ranked], latency_ms=latency_ms)
+    except Exception:
+        pass
     return jsonify({
         'input_chars': len(text),
         'active': [{'label': l, 'score': s} for l, s in active_ranked],
         'shadow': [{'label': l, 'score': s} for l, s in shadow_ranked],
-        'shadow_version': shadow_meta.get('version_tag') if shadow_meta else None
+        'shadow_version': shadow_meta.get('version_tag') if shadow_meta else None,
+        'latency_ms': latency_ms
     })
+
+
+@app.get('/api/model/eval/logs')
+def api_model_eval_logs():
+    limit_param = request.args.get('limit','100')
+    case_id = request.args.get('case_id')
+    try:
+        limit = int(limit_param)
+    except ValueError:
+        limit = 100
+    from src.db import list_inference_logs  # type: ignore
+    with get_conn() as conn:
+        rows = list_inference_logs(conn, limit=limit, case_id=case_id)
+    return jsonify({'logs': rows, 'count': len(rows)})
+
+
+@app.get('/api/model/eval/stats')
+def api_model_eval_stats():
+    case_id = request.args.get('case_id')
+    from src.db import inference_stats  # type: ignore
+    with get_conn() as conn:
+        stats = inference_stats(conn, case_id=case_id)
+    return jsonify({'case_id': case_id or 'ALL', 'stats': stats})
 
 
 # ---- Score Snapshots ----

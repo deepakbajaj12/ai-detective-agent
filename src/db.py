@@ -200,6 +200,24 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )"""
     )
+    # Inference logs for model evaluation (A/B, latency, differences)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS inference_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            input_chars INTEGER,
+            case_id TEXT,
+            query_type TEXT, -- 'ab_compare' | 'qa' | 'other'
+            prompt TEXT,
+            active_backend TEXT,
+            shadow_backend TEXT,
+            active_payload TEXT, -- JSON list of {label,score}
+            shadow_payload TEXT, -- JSON list
+            score_delta_avg REAL, -- average difference shadow - active
+            higher_count INTEGER, -- times shadow score > active score for same label
+            latency_ms REAL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
     conn.commit()
     # Attempt to add scoring columns if they don't exist
     try:
@@ -683,6 +701,87 @@ def list_case_embeddings(conn: sqlite3.Connection, case_id: str) -> list[dict]:
             except Exception:
                 r['embedding'] = None
     return rows
+
+# ---- Inference Logs (Model Evaluation) ----
+def insert_inference_log(conn: sqlite3.Connection, input_chars: int, case_id: str, query_type: str, prompt: str,
+                         active_backend: str, shadow_backend: str | None,
+                         active_payload: list[dict], shadow_payload: list[dict], latency_ms: float):
+    import json as _json
+    # Compute score deltas (shadow - active per label intersection)
+    a_map = {d.get('label'): d.get('score') for d in active_payload if d.get('label') is not None}
+    s_map = {d.get('label'): d.get('score') for d in shadow_payload if d.get('label') is not None}
+    diffs = []
+    higher = 0
+    for lab, aval in a_map.items():
+        sval = s_map.get(lab)
+        if sval is None:
+            continue
+        diff = (sval or 0.0) - (aval or 0.0)
+        diffs.append(diff)
+        if sval > aval:
+            higher += 1
+    avg_delta = float(sum(diffs)/len(diffs)) if diffs else 0.0
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO inference_logs(input_chars, case_id, query_type, prompt, active_backend, shadow_backend,
+            active_payload, shadow_payload, score_delta_avg, higher_count, latency_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (int(input_chars), case_id, query_type, prompt[:5000], active_backend, shadow_backend,
+         _json.dumps(active_payload), _json.dumps(shadow_payload), avg_delta, higher, float(latency_ms))
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+def list_inference_logs(conn: sqlite3.Connection, limit: int = 100, case_id: str | None = None) -> list[dict]:
+    cur = conn.cursor()
+    base = "SELECT * FROM inference_logs"
+    params: list[Any] = []
+    if case_id:
+        base += " WHERE case_id=?"
+        params.append(case_id)
+    base += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    cur.execute(base, tuple(params))
+    rows = []
+    import json as _json
+    for r in cur.fetchall():
+        d = dict(r)
+        for k in ['active_payload','shadow_payload']:
+            if d.get(k):
+                try:
+                    d[k] = _json.loads(d[k])
+                except Exception:
+                    d[k] = []
+        rows.append(d)
+    return rows
+
+def inference_stats(conn: sqlite3.Connection, case_id: str | None = None) -> dict:
+    cur = conn.cursor()
+    base = "SELECT score_delta_avg, higher_count FROM inference_logs"
+    params: list[Any] = []
+    if case_id:
+        base += " WHERE case_id=?"
+        params.append(case_id)
+    cur.execute(base, tuple(params))
+    rows = cur.fetchall()
+    deltas = [r['score_delta_avg'] for r in rows if r['score_delta_avg'] is not None]
+    higher_counts = [r['higher_count'] for r in rows if r['higher_count'] is not None]
+    import numpy as np
+    if deltas:
+        arr = np.array(deltas)
+        delta_stats = {
+            'avg_delta': float(arr.mean()),
+            'p25': float(np.percentile(arr,25)),
+            'p50': float(np.percentile(arr,50)),
+            'p75': float(np.percentile(arr,75)),
+            'count': int(arr.size)
+        }
+    else:
+        delta_stats = {}
+    return {
+        'deltas': delta_stats,
+        'higher_total': int(sum(higher_counts)) if higher_counts else 0,
+        'comparisons': len(higher_counts)
+    }
 
 # ---- RAG Document Chunks ----
 def insert_document_chunk(conn: sqlite3.Connection, document_id: int, case_id: str, chunk_index: int, text: str, embedding: list[float] | None = None):
