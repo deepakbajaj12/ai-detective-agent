@@ -51,6 +51,7 @@ export default function Header({ mode, onToggleMode }) {
           <Button color="inherit" component={RouterLink} to="/timeline">Timeline</Button>
           <Button color="inherit" component={RouterLink} to="/graph">Graph</Button>
           <Button color="inherit" startIcon={<BuildCircleOutlinedIcon />} onClick={()=>setJobsOpen(true)}>Jobs</Button>
+          <Button color="inherit" component={RouterLink} to="/admin">Admin</Button>
           <ThemeModeToggle mode={mode} onToggle={onToggleMode} />
           <Tooltip title={authToken ? 'Authenticated' : 'Not logged in'}>
             <Chip size="small" label={authToken ? 'AUTH' : 'ANON'} color={authToken ? 'success' : 'default'} />

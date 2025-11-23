@@ -17,6 +17,7 @@ import GraphPage from './pages/GraphPage';
 import CaseAnalysis from './pages/CaseAnalysis';
 import ChatPage from './pages/ChatPage';
 import LoginPage from './pages/LoginPage';
+import AdminConsole from './pages/AdminConsole';
 import { buildTheme } from './theme';
 
 function App() {
@@ -47,6 +48,7 @@ function App() {
               <Route path="/timeline" element={<TimelinePage />} />
               <Route path="/graph" element={<GraphPage />} />
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/admin" element={<AdminConsole />} />
             </Routes>
           </Container>
         </ErrorBoundary>
