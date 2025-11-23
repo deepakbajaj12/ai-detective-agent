@@ -31,9 +31,13 @@ try:
     from src.graph_builder import build_graph  # type: ignore
     from src.gen_ai import generate_case_analysis, answer_with_context, stream_answer  # type: ignore
     from src.pdf_generator import save_report as save_pdf_report  # type: ignore
+    from src.rag import advanced_retrieve  # type: ignore
+    from src.events_bus import publish_event, sse_stream_generator  # type: ignore
 except Exception:
     from graph_builder import build_graph  # type: ignore
     from gen_ai import generate_case_analysis, answer_with_context, stream_answer  # type: ignore
+    from rag import advanced_retrieve  # type: ignore
+    from events_bus import publish_event, sse_stream_generator  # type: ignore
 try:
     from src.jobs_backend import start_job, get_job, list_jobs as jobs_list, cancel_job as jobs_cancel, task_transformer_train, task_index_refresh, task_embeddings_refresh  # type: ignore
     from src.jobs_backend import backend_mode as job_backend_mode  # type: ignore
@@ -667,7 +671,11 @@ def api_add_clue():
     source_type = data.get('source_type') or 'manual'
     with get_conn() as conn:
         insert_clue(conn, text, data.get("suspect_id"), data.get('case_id','default'), source_type=source_type)
-        return jsonify({"ok": True}), 201
+    try:
+        publish_event('clue_added', {'text': text[:160], 'suspect_id': data.get('suspect_id'), 'case_id': data.get('case_id','default')})
+    except Exception:
+        pass
+    return jsonify({"ok": True}), 201
 
 
 @app.delete("/api/clues/<int:clue_id>")
@@ -1008,6 +1016,10 @@ def api_add_evidence(sid: str):
         if not db_get_suspect(conn, sid):
             return jsonify({"error": "Suspect not found"}), 404
     insert_evidence(conn, sid, data.get("type", "misc"), data.get("summary", ""), float(data.get("weight", 0)), data.get('case_id','default'))
+    try:
+        publish_event('evidence_added', {'suspect_id': sid, 'case_id': data.get('case_id','default')})
+    except Exception:
+        pass
     return jsonify({"ok": True, "evidence": list_evidence(conn, sid, data.get('case_id','default'))}), 201
 
 
@@ -1313,6 +1325,10 @@ def api_add_feedback():
             )
         except ValueError as ve:
             return jsonify({'error': str(ve)}), 400
+    try:
+        publish_event('feedback_added', {'suspect_id': suspect_id, 'decision': decision, 'case_id': case_id})
+    except Exception:
+        pass
     return jsonify({'ok': True, 'id': fid}), 201
 
 
@@ -1429,6 +1445,28 @@ def api_qa():
     })
 
 
+@app.get('/api/qa/advanced')
+def api_qa_advanced():
+    """Advanced hybrid RAG retrieval endpoint.
+
+    Query params:
+      q: question (required)
+      case_id: scope (default 'default')
+      k: desired diversified context size (default 10)
+    Returns: diversified context candidates and echo of query.
+    """
+    q = request.args.get('q')
+    if not q:
+        return jsonify({'error': 'q required'}), 400
+    case_id = request.args.get('case_id') or 'default'
+    try:
+        k = int(request.args.get('k','10'))
+    except ValueError:
+        k = 10
+    out = advanced_retrieve(q, case_id=case_id, mmr_k=k)
+    return jsonify(out)
+
+
 @app.post('/api/chat')
 def api_chat():
     """Streaming chat-like endpoint.
@@ -1487,6 +1525,12 @@ def api_chat():
             yield 'Unable to generate answer right now.\n'
 
     return Response(stream_with_context(_gen()), mimetype='text/plain; charset=utf-8')
+
+
+@app.get('/api/events/stream')
+def api_events_stream():
+    """Server-Sent Events stream for realtime updates (jobs, clues, feedback)."""
+    return Response(stream_with_context(sse_stream_generator()), mimetype='text/event-stream')
 
 
 @app.get('/api/timeline')

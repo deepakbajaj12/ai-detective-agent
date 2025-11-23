@@ -49,6 +49,17 @@ def start_job(job_type: str, target: Callable[[Callable[[int, Optional[str]], No
             if msg is not None:
                 j['message'] = msg
             j['updated_at'] = _now_ts()
+        # Publish realtime progress event
+        try:
+            from .events_bus import publish_event  # type: ignore
+            publish_event('job_progress', {
+                'job_id': job_id,
+                'type': job_type,
+                'progress': int(p),
+                'message': msg
+            })
+        except Exception:
+            pass
 
     def runner():
         with _lock:
@@ -61,14 +72,41 @@ def start_job(job_type: str, target: Callable[[Callable[[int, Optional[str]], No
                 _jobs[job_id]['status'] = 'completed'
                 _jobs[job_id]['result'] = result
                 _jobs[job_id]['updated_at'] = _now_ts()
+            try:
+                from .events_bus import publish_event  # type: ignore
+                publish_event('job_completed', {
+                    'job_id': job_id,
+                    'type': job_type,
+                    'result': result
+                })
+            except Exception:
+                pass
         except Exception as e:  # pragma: no cover (best-effort)
             with _lock:
                 _jobs[job_id]['status'] = 'failed'
                 _jobs[job_id]['error'] = str(e)
                 _jobs[job_id]['updated_at'] = _now_ts()
+            try:
+                from .events_bus import publish_event  # type: ignore
+                publish_event('job_failed', {
+                    'job_id': job_id,
+                    'type': job_type,
+                    'error': str(e)
+                })
+            except Exception:
+                pass
 
     t = threading.Thread(target=runner, name=f"job-{job_type}-{job_id[:6]}", daemon=True)
     t.start()
+    # Publish job queued event
+    try:
+        from .events_bus import publish_event  # type: ignore
+        publish_event('job_queued', {
+            'job_id': job_id,
+            'type': job_type
+        })
+    except Exception:
+        pass
     return job_id
 
 
