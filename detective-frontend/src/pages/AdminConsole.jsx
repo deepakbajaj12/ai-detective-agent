@@ -31,6 +31,7 @@ function Section({ title, children, actions }) {
 export default function AdminConsole() {
   const [metrics, setMetrics] = useState(null);
   const [modelVersions, setModelVersions] = useState([]);
+  const [activeTag, setActiveTag] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [graph, setGraph] = useState(null);
   const [error, setError] = useState(null);
@@ -50,6 +51,8 @@ export default function AdminConsole() {
       ]);
       setMetrics(m);
       setModelVersions(mv);
+      const act = mv.find(v=> v.role === 'active');
+      setActiveTag(act ? act.version_tag : null);
       setJobs(jb.jobs || []);
       setGraph(gr);
     } catch (e) {
@@ -92,6 +95,27 @@ export default function AdminConsole() {
     }
   };
 
+  const promoteVersion = async (version_tag) => {
+    try {
+      await apiFetch('/api/model/promote', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ version_tag }) });
+      await loadAll();
+    } catch(e) { setError(e.message); }
+  };
+
+  const setShadow = async (version_tag) => {
+    try {
+      await apiFetch('/api/model/shadow', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ version_tag }) });
+      await loadAll();
+    } catch(e) { setError(e.message); }
+  };
+
+  const rollbackActive = async () => {
+    try {
+      await apiFetch('/api/model/rollback', { method:'POST' });
+      await loadAll();
+    } catch(e) { setError(e.message); }
+  };
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>Admin Console</Typography>
@@ -121,11 +145,24 @@ export default function AdminConsole() {
           </Grid>
         )}
       </Section>
-      <Section title="Model Versions" actions={<Button size="small" onClick={()=>loadAll()} disabled={loading}>Reload</Button>}>
+      <Section title="Model Versions" actions={<Stack direction="row" spacing={1}><Button size="small" onClick={()=>loadAll()} disabled={loading}>Reload</Button><Button size="small" onClick={rollbackActive} disabled={loading || !activeTag}>Rollback</Button></Stack>}>
         <Table size="small">
-          <TableHead><TableRow><TableCell>Version</TableCell><TableCell>Role</TableCell><TableCell>Type</TableCell><TableCell>Created</TableCell></TableRow></TableHead>
+          <TableHead><TableRow><TableCell>Version</TableCell><TableCell>Role</TableCell><TableCell>Type</TableCell><TableCell>Created</TableCell><TableCell align="right">Actions</TableCell></TableRow></TableHead>
           <TableBody>
-            {modelVersions.map(m=> <TableRow key={m.version_tag}><TableCell>{m.version_tag}</TableCell><TableCell>{m.role}</TableCell><TableCell>{m.model_type}</TableCell><TableCell>{m.created_at}</TableCell></TableRow>)}
+            {modelVersions.map(m=> (
+              <TableRow key={m.version_tag}>
+                <TableCell>{m.version_tag}</TableCell>
+                <TableCell>{m.role}</TableCell>
+                <TableCell>{m.model_type}</TableCell>
+                <TableCell>{m.created_at}</TableCell>
+                <TableCell align="right">
+                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button size="small" disabled={m.role==='active'} onClick={()=>promoteVersion(m.version_tag)}>Promote</Button>
+                    <Button size="small" disabled={m.role==='shadow'} onClick={()=>setShadow(m.version_tag)}>Shadow</Button>
+                  </Stack>
+                </TableCell>
+              </TableRow>
+            ))}
           </TableBody>
         </Table>
         {modelVersions.length === 0 && <Typography variant="body2" sx={{ mt:1 }}>No versions registered.</Typography>}

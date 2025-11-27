@@ -18,6 +18,7 @@ import CaseAnalysis from './pages/CaseAnalysis';
 import ChatPage from './pages/ChatPage';
 import LoginPage from './pages/LoginPage';
 import AdminConsole from './pages/AdminConsole';
+import { getAuthToken } from './apiBase';
 import { buildTheme } from './theme';
 
 function App() {
@@ -48,7 +49,7 @@ function App() {
               <Route path="/timeline" element={<TimelinePage />} />
               <Route path="/graph" element={<GraphPage />} />
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/admin" element={<AdminConsole />} />
+              <Route path="/admin" element={getAuthToken() ? <AdminConsole /> : <Navigate to="/login" replace />} />
             </Routes>
           </Container>
         </ErrorBoundary>

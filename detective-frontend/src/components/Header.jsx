@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Tooltip from '@mui/material/Tooltip';
 import Chip from '@mui/material/Chip';
-import { isAuthenticated } from '../apiBase';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
 import Button from '@mui/material/Button';
