@@ -19,6 +19,7 @@ import ChatIcon from '@mui/icons-material/Chat';
 export default function Header({ mode, onToggleMode }) {
   const [jobsOpen, setJobsOpen] = React.useState(false);
   const [authToken, setAuthToken] = useState(null);
+  const [userRole, setUserRole] = useState(null);
   useEffect(()=> {
   const tk = localStorage.getItem('auth_token');
   setAuthToken(tk);
@@ -27,6 +28,18 @@ export default function Header({ mode, onToggleMode }) {
       if(cur !== authToken) setAuthToken(cur);
     }, 1500);
     return ()=> clearInterval(int);
+  }, [authToken]);
+  useEffect(()=>{
+    async function fetchMe(){
+      if(!authToken){ setUserRole(null); return; }
+      try{
+        const res = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } });
+        if(!res.ok) { setUserRole(null); return; }
+        const j = await res.json();
+        setUserRole(j?.user?.role || null);
+      }catch{ setUserRole(null); }
+    }
+    fetchMe();
   }, [authToken]);
   const logout = () => { localStorage.removeItem('auth_token'); setAuthToken(null); };
   return (
@@ -50,7 +63,7 @@ export default function Header({ mode, onToggleMode }) {
           <Button color="inherit" component={RouterLink} to="/timeline">Timeline</Button>
           <Button color="inherit" component={RouterLink} to="/graph">Graph</Button>
           <Button color="inherit" startIcon={<BuildCircleOutlinedIcon />} onClick={()=>setJobsOpen(true)}>Jobs</Button>
-          <Button color="inherit" component={RouterLink} to="/admin">Admin</Button>
+          {userRole === 'admin' && <Button color="inherit" component={RouterLink} to="/admin">Admin</Button>}
           <ThemeModeToggle mode={mode} onToggle={onToggleMode} />
           <Tooltip title={authToken ? 'Authenticated' : 'Not logged in'}>
             <Chip size="small" label={authToken ? 'AUTH' : 'ANON'} color={authToken ? 'success' : 'default'} />

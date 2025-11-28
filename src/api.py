@@ -58,7 +58,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 init_db()
 
-
 @app.get("/")
 def index():
     return jsonify({
@@ -106,64 +105,7 @@ def index():
         }
     })
 
-
 # ---- Jobs API (lightweight background tasks) ----
-
-@app.post('/api/jobs/transformer_train')
-def api_job_transformer_train():
-    data = request.get_json(silent=True) or {}
-    rel = data.get('training_json') or 'inputs/sample_training.json'
-    path = (BASE_DIR / rel).resolve()
-    job_id = start_job('transformer_train', task_transformer_train, str(path))
-    return jsonify({'ok': True, 'job_id': job_id}), 202
-
-
-@app.post('/api/jobs/index_refresh')
-def api_job_index_refresh():
-    data = request.get_json(silent=True) or {}
-    case_id = data.get('case_id') or 'default'
-    job_id = start_job('index_refresh', task_index_refresh, case_id)
-    return jsonify({'ok': True, 'job_id': job_id}), 202
-
-
-@app.post('/api/jobs/embeddings_refresh')
-def api_job_embeddings_refresh():
-    """Trigger a global embeddings/index refresh across all cases.
-
-    Background job will iterate through each case and rebuild semantic search indexes,
-    recording per-case durations in the embedding metrics registry.
-    Returns 202 with a job id that can be polled at /api/jobs/<id>.
-    """
-    # memory backend: we pass explicit task; RQ backend: job_type mapping ignores target
-    job_id = start_job('embeddings_refresh', task_embeddings_refresh)
-    return jsonify({'ok': True, 'job_id': job_id}), 202
-
-
-@app.get('/api/jobs/<job_id>')
-def api_job_status(job_id: str):
-    j = get_job(job_id)
-    if not j:
-        return jsonify({'error': 'job not found'}), 404
-    return jsonify(j)
-# (removed duplicate legacy job endpoints)
-
-
-@app.get('/api/jobs')
-def api_jobs_list():
-    try:
-        lim = int(request.args.get('limit','50'))
-    except ValueError:
-        lim = 50
-    rows = jobs_list(lim)
-    return jsonify({'jobs': rows, 'count': len(rows)})
-
-
-@app.post('/api/jobs/<job_id>/cancel')
-def api_job_cancel(job_id: str):
-    ok = jobs_cancel(job_id)
-    if not ok:
-        return jsonify({'error': 'cancel not supported or job not found'}), 400
-    return jsonify({'ok': True, 'job_id': job_id})
 
 
 @app.get('/api/system')
@@ -307,6 +249,74 @@ def api_auth_me():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+# ---- Jobs API (lightweight background tasks) ----
+
+@app.post('/api/jobs/transformer_train')
+@auth_required
+@role_required('admin')
+def api_job_transformer_train():
+    data = request.get_json(silent=True) or {}
+    rel = data.get('training_json') or 'inputs/sample_training.json'
+    path = (BASE_DIR / rel).resolve()
+    job_id = start_job('transformer_train', task_transformer_train, str(path))
+    return jsonify({'ok': True, 'job_id': job_id}), 202
+
+
+@app.post('/api/jobs/index_refresh')
+@auth_required
+@role_required('admin')
+def api_job_index_refresh():
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id') or 'default'
+    job_id = start_job('index_refresh', task_index_refresh, case_id)
+    return jsonify({'ok': True, 'job_id': job_id}), 202
+
+
+@app.post('/api/jobs/embeddings_refresh')
+@auth_required
+@role_required('admin')
+def api_job_embeddings_refresh():
+    """Trigger a global embeddings/index refresh across all cases.
+
+    Background job will iterate through each case and rebuild semantic search indexes,
+    recording per-case durations in the embedding metrics registry.
+    Returns 202 with a job id that can be polled at /api/jobs/<id>.
+    """
+    # memory backend: we pass explicit task; RQ backend: job_type mapping ignores target
+    job_id = start_job('embeddings_refresh', task_embeddings_refresh)
+    return jsonify({'ok': True, 'job_id': job_id}), 202
+
+
+@app.get('/api/jobs/<job_id>')
+def api_job_status(job_id: str):
+    j = get_job(job_id)
+    if not j:
+        return jsonify({'error': 'job not found'}), 404
+    return jsonify(j)
+# (removed duplicate legacy job endpoints)
+
+
+@app.get('/api/jobs')
+@auth_required
+@role_required('admin')
+def api_jobs_list():
+    try:
+        lim = int(request.args.get('limit','50'))
+    except ValueError:
+        lim = 50
+    rows = jobs_list(lim)
+    return jsonify({'jobs': rows, 'count': len(rows)})
+
+
+@app.post('/api/jobs/<job_id>/cancel')
+@auth_required
+@role_required('admin')
+def api_job_cancel(job_id: str):
+    ok = jobs_cancel(job_id)
+    if not ok:
+        return jsonify({'error': 'cancel not supported or job not found'}), 400
+    return jsonify({'ok': True, 'job_id': job_id})
 
 # ---- Helper: lightweight token weighting (heuristic) ----
 def _compute_token_weights(text: str, top_n: int = 10) -> dict[str, float]:
@@ -719,6 +729,7 @@ def api_model_versions():
 
 @app.post('/api/model/register')
 @auth_required
+@role_required('admin')
 def api_model_register():
     data = request.get_json(force=True) or {}
     version_tag = data.get('version_tag')
@@ -737,6 +748,7 @@ def api_model_register():
 
 @app.post('/api/model/promote')
 @auth_required
+@role_required('admin')
 def api_model_promote():
     data = request.get_json(force=True) or {}
     version_tag = data.get('version_tag')
@@ -753,6 +765,7 @@ def api_model_promote():
 
 @app.post('/api/model/shadow')
 @auth_required
+@role_required('admin')
 def api_model_shadow():
     data = request.get_json(force=True) or {}
     version_tag = data.get('version_tag')
@@ -769,6 +782,7 @@ def api_model_shadow():
 
 @app.post('/api/model/rollback')
 @auth_required
+@role_required('admin')
 def api_model_rollback():
     """Rollback: set the most recent archived (excluding current active) as active.
     Simple heuristic: pick latest archived row.

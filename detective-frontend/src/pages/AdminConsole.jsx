@@ -38,6 +38,19 @@ export default function AdminConsole() {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState([]);
   const sseRef = useRef(null);
+  const [role, setRole] = useState(null);
+
+  useEffect(()=>{
+    let cancelled = false;
+    async function fetchMe(){
+      try{
+        const res = await apiFetch('/api/auth/me');
+        if(!cancelled) setRole(res?.user?.role || null);
+      }catch(e){ if(!cancelled) setRole(null); }
+    }
+    fetchMe();
+    return ()=>{ cancelled = true; };
+  },[]);
 
   const loadAll = async () => {
     setLoading(true);
@@ -118,6 +131,7 @@ export default function AdminConsole() {
 
   return (
     <Box>
+      {role !== 'admin' && <Alert severity="warning" sx={{ mb:2 }}>Forbidden: Admin role required.</Alert>}
       <Typography variant="h4" gutterBottom>Admin Console</Typography>
       {error && <Alert severity="error" sx={{ mb:2 }}>{error}</Alert>}
       <Section title="System Metrics" actions={<Button size="small" onClick={loadAll} disabled={loading}>Refresh</Button>}>
