@@ -12,6 +12,8 @@ import TableRow from '@mui/material/TableRow';
 import TableCell from '@mui/material/TableCell';
 import TableBody from '@mui/material/TableBody';
 import Chip from '@mui/material/Chip';
+import TextField from '@mui/material/TextField';
+import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import Alert from '@mui/material/Alert';
 
@@ -39,6 +41,9 @@ export default function AdminConsole() {
   const [events, setEvents] = useState([]);
   const sseRef = useRef(null);
   const [role, setRole] = useState(null);
+  const [regData, setRegData] = useState({ version_tag:'', model_type:'', path:'', metrics:'' });
+  const [regError, setRegError] = useState(null);
+  const [regLoading, setRegLoading] = useState(false);
 
   useEffect(()=>{
     let cancelled = false;
@@ -129,6 +134,42 @@ export default function AdminConsole() {
     } catch(e) { setError(e.message); }
   };
 
+  const handleRegChange = (field, value) => {
+    setRegData(d => ({ ...d, [field]: value }));
+  };
+
+  const submitRegistration = async () => {
+    setRegError(null);
+    if (!regData.version_tag || !regData.model_type || !regData.path) {
+      setRegError('version_tag, model_type, and path are required');
+      return;
+    }
+    let metricsObj = {};
+    if (regData.metrics && regData.metrics.trim()) {
+      try { metricsObj = JSON.parse(regData.metrics); }
+      catch { setRegError('Metrics must be valid JSON'); return; }
+    }
+    setRegLoading(true);
+    try {
+      await apiFetch('/api/model/register', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          version_tag: regData.version_tag,
+            model_type: regData.model_type,
+            path: regData.path,
+            metrics: metricsObj
+        })
+      });
+      setRegData({ version_tag:'', model_type:'', path:'', metrics:'' });
+      await loadAll();
+    } catch(e) {
+      setRegError(e.message);
+    } finally {
+      setRegLoading(false);
+    }
+  };
+
   return (
     <Box>
       {role !== 'admin' && <Alert severity="warning" sx={{ mb:2 }}>Forbidden: Admin role required.</Alert>}
@@ -160,6 +201,32 @@ export default function AdminConsole() {
         )}
       </Section>
       <Section title="Model Versions" actions={<Stack direction="row" spacing={1}><Button size="small" onClick={()=>loadAll()} disabled={loading}>Reload</Button><Button size="small" onClick={rollbackActive} disabled={loading || !activeTag}>Rollback</Button></Stack>}>
+        <Box mb={2}>
+          <Typography variant="subtitle2" gutterBottom>Register New Model</Typography>
+          {regError && <Alert severity="error" sx={{ mb:1 }}>{regError}</Alert>}
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={3}>
+              <TextField label="Version Tag" size="small" fullWidth disabled={regLoading || role!=='admin'} value={regData.version_tag} onChange={e=>handleRegChange('version_tag', e.target.value)} />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField label="Model Type" size="small" select fullWidth disabled={regLoading || role!=='admin'} value={regData.model_type} onChange={e=>handleRegChange('model_type', e.target.value)}>
+                <MenuItem value="transformer">transformer</MenuItem>
+                <MenuItem value="embedding">embedding</MenuItem>
+                <MenuItem value="other">other</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField label="Path" size="small" fullWidth placeholder="models/model.bin" disabled={regLoading || role!=='admin'} value={regData.path} onChange={e=>handleRegChange('path', e.target.value)} />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Button variant="contained" size="small" fullWidth disabled={regLoading || role!=='admin'} onClick={submitRegistration}>Register</Button>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField label="Metrics JSON (optional)" size="small" fullWidth multiline minRows={2} disabled={regLoading || role!=='admin'} value={regData.metrics} onChange={e=>handleRegChange('metrics', e.target.value)} />
+            </Grid>
+          </Grid>
+          {role!=='admin' && <Typography variant="caption" color="text.secondary">Admin role required to register models.</Typography>}
+        </Box>
         <Table size="small">
           <TableHead><TableRow><TableCell>Version</TableCell><TableCell>Role</TableCell><TableCell>Type</TableCell><TableCell>Created</TableCell><TableCell align="right">Actions</TableCell></TableRow></TableHead>
           <TableBody>
