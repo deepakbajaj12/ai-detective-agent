@@ -5,6 +5,10 @@ import Paper from '@mui/material/Paper';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
+import Snackbar from '@mui/material/Snackbar';
+import IconButton from '@mui/material/IconButton';
+import PauseIcon from '@mui/icons-material/Pause';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import Divider from '@mui/material/Divider';
 import Table from '@mui/material/Table';
 import TableHead from '@mui/material/TableHead';
@@ -41,6 +45,8 @@ export default function AdminConsole() {
   const [events, setEvents] = useState([]);
   const sseRef = useRef(null);
   const [role, setRole] = useState(null);
+  const [eventsPaused, setEventsPaused] = useState(false);
+  const [snack, setSnack] = useState({ open:false, message:'' });
   const [regData, setRegData] = useState({ version_tag:'', model_type:'', path:'', metrics:'' });
   const [regError, setRegError] = useState(null);
   const [regLoading, setRegLoading] = useState(false);
@@ -88,6 +94,7 @@ export default function AdminConsole() {
     const es = new EventSource(`${API_BASE}/api/events/stream`);
     es.onmessage = (ev) => {
       try {
+        if (eventsPaused) return;
         const data = JSON.parse(ev.data);
         setEvents(prev => [data, ...prev.slice(0,199)]); // cap size
       } catch {}
@@ -162,6 +169,7 @@ export default function AdminConsole() {
         })
       });
       setRegData({ version_tag:'', model_type:'', path:'', metrics:'' });
+      setSnack({ open:true, message:'Model registered successfully' });
       await loadAll();
     } catch(e) {
       setRegError(e.message);
@@ -291,12 +299,17 @@ export default function AdminConsole() {
           </Grid>
         )}
       </Section>
-      <Section title="Realtime Events" actions={null}>
+      <Section title="Realtime Events" actions={
+        <IconButton size="small" onClick={()=>setEventsPaused(p=>!p)} aria-label={eventsPaused? 'Resume':'Pause'}>
+          {eventsPaused ? <PlayArrowIcon /> : <PauseIcon />}
+        </IconButton>
+      }>
         <Box sx={{ maxHeight: 240, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12, background:'#111', color:'#eee', p:1, borderRadius:1 }}>
           {events.map((ev,i)=> <div key={i}>{JSON.stringify(ev)}</div>)}
           {events.length===0 && <div>Waiting for events...</div>}
         </Box>
       </Section>
+      <Snackbar open={snack.open} autoHideDuration={2500} onClose={()=>setSnack({ open:false, message:'' })} message={snack.message} />
     </Box>
   );
 }

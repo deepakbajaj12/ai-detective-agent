@@ -47,6 +47,7 @@ outputs/*.png
 outputs/*.svg
 outputs/*.html
 data/*.db
+data/detective.db
 *.sqlite
 *.sqlite3
 
@@ -63,6 +64,11 @@ models/
 Thumbs.db
 .idea/
 .vscode/
+
+# Project-specific artifacts
+Scripts/
+share/
+src/outputs/
 
 #############################
 # Reports / notebooks (optional)
