@@ -22,6 +22,7 @@ import TextField from '@mui/material/TextField';
 import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import Alert from '@mui/material/Alert';
+import Switch from '@mui/material/Switch';
 
 function Section({ title, children, actions }) {
   return (
@@ -37,7 +38,6 @@ function Section({ title, children, actions }) {
 }
 
 export default function AdminConsole() {
-import LinearProgress from '@mui/material/LinearProgress';
   const [metrics, setMetrics] = useState(null);
   const [modelVersions, setModelVersions] = useState([]);
   const [activeTag, setActiveTag] = useState(null);
@@ -51,9 +51,15 @@ import LinearProgress from '@mui/material/LinearProgress';
   const [eventsPaused, setEventsPaused] = useState(false);
   const [snack, setSnack] = useState({ open:false, message:'' });
   const [eventFilters, setEventFilters] = useState({ jobs:true, clues:true, feedback:true, documents:true, other:true });
+  const eventFiltersRef = useRef(eventFilters);
+  const eventsPausedRef = useRef(eventsPaused);
+
+  useEffect(()=>{ eventFiltersRef.current = eventFilters; }, [eventFilters]);
+  useEffect(()=>{ eventsPausedRef.current = eventsPaused; }, [eventsPaused]);
   const [regData, setRegData] = useState({ version_tag:'', model_type:'', path:'', metrics:'' });
   const [regError, setRegError] = useState(null);
   const [regLoading, setRegLoading] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(false);
 
   useEffect(()=>{
     let cancelled = false;
@@ -93,21 +99,28 @@ import LinearProgress from '@mui/material/LinearProgress';
   useEffect(()=> { loadAll(); }, []);
 
   useEffect(()=> {
+    if (!autoRefresh) return;
+    const id = setInterval(loadAll, 10000);
+    return ()=> clearInterval(id);
+  }, [autoRefresh]);
+
+  useEffect(()=> {
     // SSE subscription
     if (sseRef.current) return;
     const es = new EventSource(`${API_BASE}/api/events/stream`);
     es.onmessage = (ev) => {
       try {
-        if (eventsPaused) return;
+        if (eventsPausedRef.current) return;
         const data = JSON.parse(ev.data);
         // Filter by event type
         const t = (data?.type || '').toLowerCase();
+        const f = eventFiltersRef.current;
         const allow =
-          (t.includes('job') && eventFilters.jobs) ||
-          (t.includes('clue') && eventFilters.clues) ||
-          (t.includes('feedback') && eventFilters.feedback) ||
-          (t.includes('doc') && eventFilters.documents) ||
-          eventFilters.other;
+          (t.includes('job') && f.jobs) ||
+          (t.includes('clue') && f.clues) ||
+          (t.includes('feedback') && f.feedback) ||
+          (t.includes('doc') && f.documents) ||
+          f.other;
         if (!allow) return;
         setEvents(prev => [data, ...prev.slice(0,199)]); // cap size
       } catch {}
@@ -196,7 +209,7 @@ import LinearProgress from '@mui/material/LinearProgress';
       {role !== 'admin' && <Alert severity="warning" sx={{ mb:2 }}>Forbidden: Admin role required.</Alert>}
       <Typography variant="h4" gutterBottom>Admin Console</Typography>
       {error && <Alert severity="error" sx={{ mb:2 }}>{error}</Alert>}
-      <Section title="System Metrics" actions={<Button size="small" onClick={loadAll} disabled={loading}>Refresh</Button>}>
+      <Section title="System Metrics" actions={<Stack direction="row" spacing={1} alignItems="center"><FormControlLabel control={<Switch size="small" checked={autoRefresh} onChange={e=>setAutoRefresh(e.target.checked)} />} label="Auto-refresh" /><Button size="small" onClick={loadAll} disabled={loading}>Refresh</Button></Stack>}>
         {!metrics && <Typography variant="body2">Loading...</Typography>}
         {metrics && (
           <Grid container spacing={2}>
@@ -293,7 +306,10 @@ import LinearProgress from '@mui/material/LinearProgress';
               <TableRow key={j.id}>
                 <TableCell>{j.id}</TableCell>
                 <TableCell>{j.job_type}</TableCell>
-                <TableCell>{j.status}</TableCell>
+                <TableCell>
+                  <Chip size="small" label={j.status}
+                        color={j.status==='running' ? 'primary' : j.status==='completed' ? 'success' : j.status==='failed' ? 'error' : 'default'} />
+                </TableCell>
                 <TableCell>{j.started_at}</TableCell>
                 <TableCell>{j.duration_s != null ? j.duration_s.toFixed(2) : ''}</TableCell>
                 <TableCell align="right">
