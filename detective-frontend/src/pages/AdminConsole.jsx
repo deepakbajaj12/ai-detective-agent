@@ -202,15 +202,25 @@ import LinearProgress from '@mui/material/LinearProgress';
           <Grid container spacing={2}>
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2">Entity Counts</Typography>
-              <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt:1 }}>
-                {Object.entries(metrics.counts || {}).map(([k,v])=> <Chip key={k} label={`${k}: ${v}`} />)}
-              </Stack>
+              <Box sx={{ mt:1 }}>
+                {Object.entries(metrics.counts || {}).map(([k,v])=> (
+                  <Box key={k} sx={{ mb:1 }}>
+                    <Typography variant="caption">{k}: {v}</Typography>
+                    <LinearProgress variant="determinate" value={Math.min(100, Number(v))} sx={{ height:6, borderRadius:1 }} />
+                  </Box>
+                ))}
+              </Box>
             </Grid>
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2">Embedding Stats</Typography>
-              <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt:1 }}>
-                {metrics.embeddings ? Object.entries(metrics.embeddings).map(([k,v])=> <Chip key={k} label={`${k}: ${v}`} />) : <Chip label="No embedding data" />}
-              </Stack>
+              <Box sx={{ mt:1 }}>
+                {metrics.embeddings ? Object.entries(metrics.embeddings).map(([k,v])=> (
+                  <Box key={k} sx={{ mb:1 }}>
+                    <Typography variant="caption">{k}: {v}</Typography>
+                    <LinearProgress variant="determinate" value={Math.min(100, Number(v))} sx={{ height:6, borderRadius:1 }} />
+                  </Box>
+                )) : <Chip label="No embedding data" />}
+              </Box>
             </Grid>
             <Grid item xs={12}>
               <Typography variant="subtitle2">Score Distribution</Typography>
