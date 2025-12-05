@@ -115,6 +115,36 @@ npm install
 npm start
 ```
 
+## 🔐 Authentication & Admin Console
+
+- Obtain a token via `POST /api/auth/login` or `POST /api/auth/register` (default role `user`).
+- Admin-only endpoints: jobs and model version management. Assign `role=admin` to your user in the DB to access.
+- Admin Console (frontend): navigate to `/admin`. Features:
+	- System metrics and graph analytics overview
+	- Model versions with Promote/Shadow/Rollback actions
+	- Register New Model form (version tag, type, path, optional metrics JSON)
+	- Realtime event stream with Pause/Resume and type filters (Jobs/Clues/Feedback/Documents)
+
+## 📊 Graph Analytics
+
+Endpoint: `GET /api/graph/analytics`
+
+Returns degree, betweenness, simple community detection, and anomaly hints for nodes. Used by Admin Console for quick insight.
+
+## 🧭 Admin Actions
+
+- Refresh indexes: `POST /api/jobs/index_refresh`
+- Refresh embeddings: `POST /api/jobs/embeddings_refresh`
+- Train transformer: `POST /api/jobs/transformer_train`
+- Manage models:
+	- List: `GET /api/model/versions`
+	- Register: `POST /api/model/register`
+	- Promote active: `POST /api/model/promote`
+	- Shadow: `POST /api/model/shadow`
+	- Rollback: `POST /api/model/rollback`
+
+All require a valid JWT; some require `admin` role.
+
 ## 🧪 Training Sample
 Place / edit training data at `inputs/sample_training.json` (list of {"text","label"}). First request to `/api/suspects` triggers model training if needed.
 

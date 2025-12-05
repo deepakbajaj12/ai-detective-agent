@@ -9,6 +9,8 @@ import Snackbar from '@mui/material/Snackbar';
 import IconButton from '@mui/material/IconButton';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Checkbox from '@mui/material/Checkbox';
 import Divider from '@mui/material/Divider';
 import Table from '@mui/material/Table';
 import TableHead from '@mui/material/TableHead';
@@ -47,6 +49,7 @@ export default function AdminConsole() {
   const [role, setRole] = useState(null);
   const [eventsPaused, setEventsPaused] = useState(false);
   const [snack, setSnack] = useState({ open:false, message:'' });
+  const [eventFilters, setEventFilters] = useState({ jobs:true, clues:true, feedback:true, documents:true, other:true });
   const [regData, setRegData] = useState({ version_tag:'', model_type:'', path:'', metrics:'' });
   const [regError, setRegError] = useState(null);
   const [regLoading, setRegLoading] = useState(false);
@@ -96,6 +99,15 @@ export default function AdminConsole() {
       try {
         if (eventsPaused) return;
         const data = JSON.parse(ev.data);
+        // Filter by event type
+        const t = (data?.type || '').toLowerCase();
+        const allow =
+          (t.includes('job') && eventFilters.jobs) ||
+          (t.includes('clue') && eventFilters.clues) ||
+          (t.includes('feedback') && eventFilters.feedback) ||
+          (t.includes('doc') && eventFilters.documents) ||
+          eventFilters.other;
+        if (!allow) return;
         setEvents(prev => [data, ...prev.slice(0,199)]); // cap size
       } catch {}
     };
@@ -304,6 +316,13 @@ export default function AdminConsole() {
           {eventsPaused ? <PlayArrowIcon /> : <PauseIcon />}
         </IconButton>
       }>
+        <Stack direction="row" spacing={2} sx={{ mb:1 }}>
+          <FormControlLabel control={<Checkbox size="small" checked={eventFilters.jobs} onChange={e=>setEventFilters(f=>({ ...f, jobs:e.target.checked }))} />} label="Jobs" />
+          <FormControlLabel control={<Checkbox size="small" checked={eventFilters.clues} onChange={e=>setEventFilters(f=>({ ...f, clues:e.target.checked }))} />} label="Clues" />
+          <FormControlLabel control={<Checkbox size="small" checked={eventFilters.feedback} onChange={e=>setEventFilters(f=>({ ...f, feedback:e.target.checked }))} />} label="Feedback" />
+          <FormControlLabel control={<Checkbox size="small" checked={eventFilters.documents} onChange={e=>setEventFilters(f=>({ ...f, documents:e.target.checked }))} />} label="Documents" />
+          <FormControlLabel control={<Checkbox size="small" checked={eventFilters.other} onChange={e=>setEventFilters(f=>({ ...f, other:e.target.checked }))} />} label="Other" />
+        </Stack>
         <Box sx={{ maxHeight: 240, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12, background:'#111', color:'#eee', p:1, borderRadius:1 }}>
           {events.map((ev,i)=> <div key={i}>{JSON.stringify(ev)}</div>)}
           {events.length===0 && <div>Waiting for events...</div>}
