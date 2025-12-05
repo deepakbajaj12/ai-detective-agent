@@ -37,6 +37,7 @@ function Section({ title, children, actions }) {
 }
 
 export default function AdminConsole() {
+import LinearProgress from '@mui/material/LinearProgress';
   const [metrics, setMetrics] = useState(null);
   const [modelVersions, setModelVersions] = useState([]);
   const [activeTag, setActiveTag] = useState(null);
@@ -213,9 +214,15 @@ export default function AdminConsole() {
             </Grid>
             <Grid item xs={12}>
               <Typography variant="subtitle2">Score Distribution</Typography>
-              <Stack direction="row" spacing={1} sx={{ mt:1 }}>
-                {metrics.scores && Object.entries(metrics.scores).map(([k,v])=> <Chip key={k} label={`${k}: ${v}`} />)}
-              </Stack>
+              <Box sx={{ mt:1 }}>
+                {metrics.scores && Object.entries(metrics.scores).map(([k,v])=> (
+                  <Box key={k} sx={{ mb:1 }}>
+                    <Typography variant="caption">{k}: {v}</Typography>
+                    <LinearProgress variant="determinate" value={Math.min(100, Number(v)*100)} sx={{ height:6, borderRadius:1 }} />
+                  </Box>
+                ))}
+                {!metrics.scores && <Chip label="No scores available" />}
+              </Box>
             </Grid>
           </Grid>
         )}
@@ -270,9 +277,20 @@ export default function AdminConsole() {
       </Section>
       <Section title="Jobs" actions={<Stack direction="row" spacing={1}><Button size="small" onClick={()=>triggerJob('transformer_train')}>Train</Button><Button size="small" onClick={()=>triggerJob('index_refresh')}>Index Refresh</Button><Button size="small" onClick={()=>triggerJob('embeddings_refresh')}>Embeddings Refresh</Button></Stack>}>
         <Table size="small">
-          <TableHead><TableRow><TableCell>ID</TableCell><TableCell>Type</TableCell><TableCell>Status</TableCell><TableCell>Started</TableCell><TableCell>Duration (s)</TableCell></TableRow></TableHead>
+          <TableHead><TableRow><TableCell>ID</TableCell><TableCell>Type</TableCell><TableCell>Status</TableCell><TableCell>Started</TableCell><TableCell>Duration (s)</TableCell><TableCell align="right">Actions</TableCell></TableRow></TableHead>
           <TableBody>
-            {jobs.map(j=> <TableRow key={j.id}><TableCell>{j.id}</TableCell><TableCell>{j.job_type}</TableCell><TableCell>{j.status}</TableCell><TableCell>{j.started_at}</TableCell><TableCell>{j.duration_s != null ? j.duration_s.toFixed(2) : ''}</TableCell></TableRow>)}
+            {jobs.map(j=> (
+              <TableRow key={j.id}>
+                <TableCell>{j.id}</TableCell>
+                <TableCell>{j.job_type}</TableCell>
+                <TableCell>{j.status}</TableCell>
+                <TableCell>{j.started_at}</TableCell>
+                <TableCell>{j.duration_s != null ? j.duration_s.toFixed(2) : ''}</TableCell>
+                <TableCell align="right">
+                  <Button size="small" disabled={j.status!=='running'} onClick={()=>apiFetch(`/api/jobs/${encodeURIComponent(j.id)}/cancel`, { method:'POST' }).then(loadAll).catch(e=>setError(e.message))}>Cancel</Button>
+                </TableCell>
+              </TableRow>
+            ))}
           </TableBody>
         </Table>
         {jobs.length === 0 && <Typography variant="body2" sx={{ mt:1 }}>No jobs found.</Typography>}
