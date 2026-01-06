@@ -9,3 +9,5 @@ reportlab>=4.0
 networkx>=3.2
 matplotlib>=3.8
 python-dotenv>=1.0
+flasgger>=0.9.7.1
+google-generativeai>=0.4

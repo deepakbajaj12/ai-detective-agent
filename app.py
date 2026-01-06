@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()  # Load .env file
 
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIR = BASE_DIR / "src"

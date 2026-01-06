@@ -6,15 +6,16 @@ simple heuristic text assembler so the endpoint still responds.
 
 Environment Variables:
   OPENAI_API_KEY  -> if present, will attempt to call OpenAI Chat Completions
+  GEMINI_API_KEY  -> if present, will attempt to call Google Gemini
   GENAI_MODEL     -> override default local model name (for transformers fallback)
 
 Add the following optional packages if you want richer output:
-  pip install openai==1.* transformers>=4.40 accelerate==0.* safetensors faiss-cpu
+  pip install openai==1.* google-generativeai transformers>=4.40 accelerate==0.* safetensors faiss-cpu
 
 The design keeps imports lazy so the core app runs without heavy deps.
 """
 from __future__ import annotations
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Iterable
 import os
 import math
 
@@ -27,6 +28,22 @@ def _truncate(txt: str, max_chars: int = 6000) -> str:
 
 def _openai_available() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY"))
+
+
+def _gemini_available() -> bool:
+    return bool(os.environ.get("GEMINI_API_KEY"))
+
+
+def _call_gemini(prompt: str) -> str:
+    try:
+        import google.generativeai as genai
+        api_key = os.environ.get("GEMINI_API_KEY")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"[Gemini call failed: {e}]"
 
 
 def _call_openai(prompt: str) -> str:
@@ -48,6 +65,36 @@ def _call_openai(prompt: str) -> str:
         return resp.choices[0].message.content.strip()
     except Exception as e:
         return f"[OpenAI call failed: {e}]"
+
+
+def _stream_openai(prompt: str) -> Iterable[str]:
+    """Yield content chunks from OpenAI chat completions streaming API."""
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception:
+        yield "[OpenAI SDK not installed]"
+        return
+    client = OpenAI()
+    try:
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an analytical forensic investigation assistant. Be concise, structured, and cite evidence succinctly."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.25,
+            max_tokens=800,
+            stream=True,
+        )
+        for event in stream:
+            try:
+                delta = event.choices[0].delta.get('content')
+                if delta:
+                    yield delta
+            except Exception:
+                continue
+    except Exception as e:
+        yield f"[OpenAI stream failed: {e}]"
 
 
 def _transformers_available() -> bool:
@@ -105,8 +152,9 @@ def generate_case_analysis(case_id: str, clues: List[str], suspects: List[Dict[s
 
     Strategy (tiered):
       1. If OPENAI key -> structured prompt to GPT style model
-      2. Else if transformers installed -> summarization of compiled context
-      3. Else -> heuristic textual summary
+      2. If GEMINI key -> structured prompt to Gemini model
+      3. Else if transformers installed -> summarization of compiled context
+      4. Else -> heuristic textual summary
     """
     style = style.lower().strip()
     style_tag = style if style in {"brief", "detailed"} else "brief"
@@ -143,6 +191,9 @@ DATA CONTEXT:\n{_truncate(base_context, 9000)}
     if _openai_available():
         content = _call_openai(prompt)
         backend = "openai"
+    elif _gemini_available():
+        content = _call_gemini(prompt)
+        backend = "gemini"
     elif _transformers_available():
         # We create a pseudo summary then append a structured heuristic tail
         summary = _hf_summarize(base_context)
@@ -166,8 +217,9 @@ def answer_with_context(question: str, context: str, style: str = "brief") -> Di
 
     Tiered strategy like generate_case_analysis:
       1) If OPENAI available -> chat completion with clear grounding instruction
-      2) Else if transformers available -> summarize context and append heuristic
-      3) Else -> heuristic extraction from context
+      2) If GEMINI available -> chat completion with clear grounding instruction
+      3) Else if transformers available -> summarize context and append heuristic
+      4) Else -> heuristic extraction from context
     """
     style = style.lower().strip()
     style_tag = style if style in {"brief","detailed"} else "brief"
@@ -181,6 +233,8 @@ QUESTION: {question}
 """.strip()
     if _openai_available():
         return { 'backend': 'openai', 'answer': _call_openai(prompt) }
+    elif _gemini_available():
+        return { 'backend': 'gemini', 'answer': _call_gemini(prompt) }
     elif _transformers_available():
         summary = _hf_summarize(context)
         tail = f"Heuristic extraction: key terms -> {', '.join([w for w in question.split() if len(w)>3][:6])}"
@@ -200,3 +254,31 @@ QUESTION: {question}
 
 
 __all__ = ["generate_case_analysis", "answer_with_context"]
+def stream_answer(question: str, context: str, style: str = "brief", chunk_size: int = 64) -> Iterable[str]:
+    """Stream an answer chunk-by-chunk. Uses OpenAI streaming when available.
+
+    If OpenAI isn't available, falls back to single-shot answer_with_context and chunks it.
+    """
+    style = style.lower().strip()
+    prompt = f"""
+You are an AI investigator. Using ONLY the supplied CONTEXT, answer the QUESTION concisely.
+If the answer is uncertain, say so explicitly and briefly.
+
+CONTEXT:\n{_truncate(context, 9000)}
+
+QUESTION: {question}
+""".strip()
+    if _openai_available():
+        for piece in _stream_openai(prompt):
+            yield piece
+        return
+    
+    # Gemini streaming isn't implemented here yet, fall back to non-streaming path
+    ans = answer_with_context(question, context)
+    text = ans.get('answer','') or ''
+    for i in range(0, len(text), chunk_size):
+        yield text[i:i+chunk_size]
+    if not text.endswith('\n'):
+        yield '\n'
+
+__all__.append("stream_answer")
