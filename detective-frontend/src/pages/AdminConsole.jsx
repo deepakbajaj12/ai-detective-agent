@@ -42,6 +42,7 @@ export default function AdminConsole() {
   const [modelVersions, setModelVersions] = useState([]);
   const [activeTag, setActiveTag] = useState(null);
   const [jobs, setJobs] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [graph, setGraph] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -77,11 +78,12 @@ export default function AdminConsole() {
     setLoading(true);
     setError(null);
     try {
-      const [m, mv, jb, gr] = await Promise.all([
+      const [m, mv, jb, gr, docs] = await Promise.all([
         apiFetch('/api/metrics'),
         apiFetch('/api/model/versions'),
         apiFetch('/api/jobs'),
-        apiFetch('/api/graph/analytics')
+        apiFetch('/api/graph/analytics'),
+        apiFetch('/api/documents')
       ]);
       setMetrics(m);
       setModelVersions(mv);
@@ -89,6 +91,7 @@ export default function AdminConsole() {
       setActiveTag(act ? act.version_tag : null);
       setJobs(jb.jobs || []);
       setGraph(gr);
+      setDocuments(docs || []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -379,6 +382,22 @@ export default function AdminConsole() {
             </Grid>
           </Grid>
         )}
+      </Section>
+      <Section title="Ingested Documents" actions={<Button size="small" onClick={()=>loadAll()}>Refresh</Button>}>
+        <Table size="small">
+          <TableHead><TableRow><TableCell>ID</TableCell><TableCell>Filename</TableCell><TableCell>Case ID</TableCell><TableCell>Date</TableCell></TableRow></TableHead>
+          <TableBody>
+            {documents.map(d=> (
+              <TableRow key={d.id}>
+                <TableCell>{d.id}</TableCell>
+                <TableCell>{d.filename}</TableCell>
+                <TableCell>{d.case_id}</TableCell>
+                <TableCell>{d.created_at}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {documents.length === 0 && <Typography variant="body2" sx={{ mt:1 }}>No documents found.</Typography>}
       </Section>
       <Section title="Realtime Events" actions={
         <IconButton size="small" onClick={()=>setEventsPaused(p=>!p)} aria-label={eventsPaused? 'Resume':'Pause'}>
