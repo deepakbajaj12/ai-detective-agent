@@ -23,6 +23,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import Alert from '@mui/material/Alert';
 import Switch from '@mui/material/Switch';
+import LinearProgress from '@mui/material/LinearProgress';
 
 function Section({ title, children, actions }) {
   return (
@@ -43,6 +44,7 @@ export default function AdminConsole() {
   const [activeTag, setActiveTag] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [feedbackStats, setFeedbackStats] = useState(null);
   const [graph, setGraph] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -78,12 +80,13 @@ export default function AdminConsole() {
     setLoading(true);
     setError(null);
     try {
-      const [m, mv, jb, gr, docs] = await Promise.all([
+      const [m, mv, jb, gr, docs, fb] = await Promise.all([
         apiFetch('/api/metrics'),
         apiFetch('/api/model/versions'),
         apiFetch('/api/jobs'),
         apiFetch('/api/graph/analytics'),
-        apiFetch('/api/documents')
+        apiFetch('/api/documents'),
+        apiFetch('/api/feedback/stats')
       ]);
       setMetrics(m);
       setModelVersions(mv);
@@ -92,6 +95,7 @@ export default function AdminConsole() {
       setJobs(jb.jobs || []);
       setGraph(gr);
       setDocuments(docs || []);
+      setFeedbackStats(fb);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -276,6 +280,42 @@ export default function AdminConsole() {
               </Box>
             </Grid>
           </Grid>
+        )}
+      </Section>
+      <Section title="Feedback Analytics" actions={<Button size="small" onClick={loadAll}>Refresh</Button>}>
+        {!feedbackStats ? <Typography variant="body2">Loading...</Typography> : (
+            <Grid container spacing={2}>
+                <Grid item xs={12} md={4}>
+                   <Typography variant="subtitle2">Confirmation Rate</Typography>
+                   <Box sx={{ display: 'flex', alignItems: 'center', mt:1 }}>
+                     <Box sx={{ width: '100%', mr: 1 }}>
+                       <LinearProgress variant="determinate" value={feedbackStats.confirmation_rate != null ? feedbackStats.confirmation_rate * 100 : 0} color="success" sx={{ height: 10, borderRadius: 5 }} />
+                     </Box>
+                     <Box sx={{ minWidth: 35 }}>
+                       <Typography variant="body2" color="text.secondary">{feedbackStats.confirmation_rate != null ? Math.round(feedbackStats.confirmation_rate * 100) + '%' : 'N/A'}</Typography>
+                     </Box>
+                   </Box>
+                </Grid>
+                <Grid item xs={12} md={4}>
+                   <Typography variant="subtitle2">Precision @ Rank 1</Typography>
+                   <Box sx={{ display: 'flex', alignItems: 'center', mt:1 }}>
+                     <Box sx={{ width: '100%', mr: 1 }}>
+                       <LinearProgress variant="determinate" value={feedbackStats.precision_at_1_proxy != null ? feedbackStats.precision_at_1_proxy * 100 : 0} color="primary" sx={{ height: 10, borderRadius: 5 }} />
+                     </Box>
+                     <Box sx={{ minWidth: 35 }}>
+                       <Typography variant="body2" color="text.secondary">{feedbackStats.precision_at_1_proxy != null ? Math.round(feedbackStats.precision_at_1_proxy * 100) + '%' : 'N/A'}</Typography>
+                     </Box>
+                   </Box>
+                </Grid>
+                <Grid item xs={12} md={4}>
+                    <Typography variant="subtitle2">Total Feedback</Typography>
+                    <Typography variant="h4" sx={{ mt:1 }}>{feedbackStats.total}</Typography>
+                    <Stack direction="row" spacing={1} mt={1}>
+                        <Chip size="small" label={`Confirm: ${feedbackStats.counts?.confirm || 0}`} color="success" />
+                        <Chip size="small" label={`Reject: ${feedbackStats.counts?.reject || 0}`} color="error" />
+                    </Stack>
+                </Grid>
+            </Grid>
         )}
       </Section>
       <Section title="Model Versions" actions={<Stack direction="row" spacing={1}><Button size="small" onClick={()=>loadAll()} disabled={loading}>Reload</Button><Button size="small" onClick={rollbackActive} disabled={loading || !activeTag}>Rollback</Button></Stack>}>
