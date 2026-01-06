@@ -8,7 +8,21 @@ export async function apiFetch(path, options = {}) {
     headers.set('Authorization', `Bearer ${token}`);
   }
   const finalOpts = { ...options, headers };
-  const res = await fetch(url, finalOpts);
+
+  let res;
+  try {
+    res = await fetch(url, finalOpts);
+  } catch (err) {
+    console.error("API Fetch Error:", err);
+    if (url.includes('localhost') && !window.location.hostname.includes('localhost')) {
+      throw new Error(
+        `Connection failed to ${url}. You are on a deployed site but the API is pointing to localhost. ` +
+        `Please set the 'REACT_APP_API_BASE' environment variable in your Render dashboard to your Backend URL.`
+      );
+    }
+    throw new Error(`Network error connecting to ${API_BASE}: ${err.message}`);
+  }
+
   const ct = res.headers.get('content-type') || '';
   // Parse body early for error clarity
   let bodyText = '';
