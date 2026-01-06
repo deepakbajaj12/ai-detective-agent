@@ -1,6 +1,19 @@
-# Getting Started with Create React App
+# Detective Agent Frontend
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+
+## Deployment Configuration (Critical)
+
+### Fix for "Connection Refused" on Render
+If you see an error saying `Connection failed to http://localhost:5000...`, you need to configure your Backend URL.
+
+1.  **Find your Backend URL** on Render (e.g., `https://my-backend.onrender.com`).
+2.  Go to your **Frontend Service** on Render settings.
+3.  Click **Environment**.
+4.  Add Variable:
+    *   Key: `REACT_APP_API_BASE`
+    *   Value: `https://my-backend.onrender.com` (no trailing slash)
+5.  **Trigger a Redeploy** (Clear build cache & deploy) for changes to take effect.
 
 ## Available Scripts
 

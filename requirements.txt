@@ -9,7 +9,7 @@ joblib>=1.3
 ##########################
 Flask>=3.0
 flask-cors>=4.0
-flasgger>=0.9.11
+flasgger>=0.9.7.1
 
 ##########################
 # NLP / Text
@@ -57,7 +57,11 @@ prometheus-client>=0.20
 # Optional DB connectors (only if you actually use Postgres/MySQL)
 ##########################
 psycopg2-binary>=2.9 ; platform_system != 'Windows' or platform_machine != 'ARM64'
+##########################
+# GenAI
+##########################
 mysql-connector-python>=8.3
+google-generativeai>=0.4
 
 ##########################
 # Dev / Utilities (optional)
