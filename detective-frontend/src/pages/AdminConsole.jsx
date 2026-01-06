@@ -204,6 +204,31 @@ export default function AdminConsole() {
     }
   };
 
+  const exportJobsCSV = () => {
+    if (!jobs || jobs.length === 0) return;
+    const headers = ["ID", "Type", "Status", "Started", "Duration (s)"];
+    const rows = jobs.map(j => [
+      j.id,
+      j.job_type,
+      j.status,
+      j.started_at,
+      j.duration_s
+    ]);
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(item => `"${item || ''}"`).join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `jobs_export_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <Box>
       {role !== 'admin' && <Alert severity="warning" sx={{ mb:2 }}>Forbidden: Admin role required.</Alert>}
@@ -298,7 +323,7 @@ export default function AdminConsole() {
         </Table>
         {modelVersions.length === 0 && <Typography variant="body2" sx={{ mt:1 }}>No versions registered.</Typography>}
       </Section>
-      <Section title="Jobs" actions={<Stack direction="row" spacing={1}><Button size="small" onClick={()=>triggerJob('transformer_train')}>Train</Button><Button size="small" onClick={()=>triggerJob('index_refresh')}>Index Refresh</Button><Button size="small" onClick={()=>triggerJob('embeddings_refresh')}>Embeddings Refresh</Button></Stack>}>
+      <Section title="Jobs" actions={<Stack direction="row" spacing={1}><Button size="small" onClick={()=>triggerJob('transformer_train')}>Train</Button><Button size="small" onClick={()=>triggerJob('index_refresh')}>Index Refresh</Button><Button size="small" onClick={()=>triggerJob('embeddings_refresh')}>Embeddings Refresh</Button><Button size="small" onClick={exportJobsCSV}>Export CSV</Button></Stack>}>
         <Table size="small">
           <TableHead><TableRow><TableCell>ID</TableCell><TableCell>Type</TableCell><TableCell>Status</TableCell><TableCell>Started</TableCell><TableCell>Duration (s)</TableCell><TableCell align="right">Actions</TableCell></TableRow></TableHead>
           <TableBody>

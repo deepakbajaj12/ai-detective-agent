@@ -4,6 +4,7 @@ from typing import Dict, Any
 
 from flask import Flask, jsonify, request, Response, stream_with_context, send_file
 from flask_cors import CORS
+from flasgger import Swagger
 
 try:  # package import (preferred when running `python -m src.api`)
     from src.utils import read_clues
@@ -52,6 +53,7 @@ except Exception:
 
 app = Flask(__name__)
 CORS(app)
+swagger = Swagger(app)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
