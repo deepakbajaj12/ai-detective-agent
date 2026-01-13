@@ -50,6 +50,11 @@ except Exception:
         def job_backend_mode():  # type: ignore
             return 'memory'
 
+try:
+    from src.db import export_case_data  # type: ignore
+except ImportError:
+    from db import export_case_data  # type: ignore
+
 
 app = Flask(__name__)
 CORS(app)
@@ -394,6 +399,17 @@ def api_create_case():
             return jsonify({'error': 'case id exists'}), 409
         insert_case(conn, cid, name, data.get('description',''))
         return jsonify({'ok': True}), 201
+
+
+@app.get('/api/cases/<case_id>/export')
+@auth_required
+def api_export_case(case_id):
+    """Export all case data as JSON."""
+    with get_conn() as conn:
+        data = export_case_data(conn, case_id)
+        if not data:
+            return jsonify({'error': 'case not found'}), 404
+        return jsonify(data)
 
 
 @app.get("/api/suspects")
