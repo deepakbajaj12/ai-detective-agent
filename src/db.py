@@ -1045,6 +1045,21 @@ def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict | None:
     return d
 
 
+def get_db_stats(conn: sqlite3.Connection) -> dict:
+    """Returns counts of records in main tables."""
+    cur = conn.cursor()
+    stats = {}
+    tables = ['cases', 'suspects', 'clues', 'evidence', 'documents']
+    for table in tables:
+        try:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            res = cur.fetchone()
+            stats[table] = res[0] if res else 0
+        except sqlite3.OperationalError:
+            stats[table] = 0
+    return stats
+
+
 if __name__ == "__main__":
     init_db()
     with get_conn() as c:
