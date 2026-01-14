@@ -610,6 +610,43 @@ def insert_case(conn: sqlite3.Connection, case_id: str, name: str, description: 
     conn.commit()
 
 
+def export_case_data(conn: sqlite3.Connection, case_id: str) -> Optional[dict]:
+    """Export all data associated with a case as a dictionary."""
+    case = get_case(conn, case_id)
+    if not case:
+        return None
+    
+    data = {"case": case}
+    
+    cur = conn.cursor()
+    
+    # Suspects
+    cur.execute("SELECT * FROM suspects WHERE case_id=?", (case_id,))
+    data["suspects"] = [dict(row) for row in cur.fetchall()]
+    
+    # Clues
+    cur.execute("SELECT * FROM clues WHERE case_id=?", (case_id,))
+    data["clues"] = [dict(row) for row in cur.fetchall()]
+    
+    # Evidence
+    cur.execute("SELECT * FROM evidence WHERE case_id=?", (case_id,))
+    data["evidence"] = [dict(row) for row in cur.fetchall()]
+    
+    # Allegations
+    cur.execute("SELECT * FROM allegations WHERE case_id=?", (case_id,))
+    data["allegations"] = [dict(row) for row in cur.fetchall()]
+    
+    # Documents
+    cur.execute("SELECT * FROM documents WHERE case_id=?", (case_id,))
+    data["documents"] = [dict(row) for row in cur.fetchall()]
+    
+    # Timeline Events
+    cur.execute("SELECT * FROM timeline_events WHERE case_id=?", (case_id,))
+    data["timeline_events"] = [dict(row) for row in cur.fetchall()]
+    
+    return data
+
+
 def persist_scores(conn: sqlite3.Connection, score_map: dict[str, float]):
     cur = conn.cursor()
     for sid, score in score_map.items():
@@ -1006,6 +1043,21 @@ def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict | None:
     except Exception:
         d['payload'] = []
     return d
+
+
+def get_db_stats(conn: sqlite3.Connection) -> dict:
+    """Returns counts of records in main tables."""
+    cur = conn.cursor()
+    stats = {}
+    tables = ['cases', 'suspects', 'clues', 'evidence', 'documents']
+    for table in tables:
+        try:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            res = cur.fetchone()
+            stats[table] = res[0] if res else 0
+        except sqlite3.OperationalError:
+            stats[table] = 0
+    return stats
 
 
 if __name__ == "__main__":
