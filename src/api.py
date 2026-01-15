@@ -30,13 +30,13 @@ except ImportError:  # fallback
     from db import init_db, get_conn, list_suspects as db_list_suspects, get_suspect as db_get_suspect, insert_suspect, update_suspect, delete_suspect, list_clues as db_list_clues, insert_clue, delete_clue, list_evidence, insert_evidence, update_evidence, delete_evidence, aggregate_clues_text, persist_scores, persist_composite_scores, list_cases, get_case, insert_case, list_allegations, insert_allegation, delete_allegation, insert_document, list_documents, get_document, insert_feedback, list_feedback, feedback_stats, clear_attributions, insert_attribution, fetch_attributions, insert_document_chunk, list_chunks, insert_event, list_events, create_user, find_user, create_token, get_user_by_token, annotate_clue, recompute_duplicates, recompute_clue_quality, insert_model_version, list_model_versions, get_model_version, set_model_role, clear_role, get_active_model, get_shadow_model, update_model_metrics, insert_snapshot, list_snapshots, get_snapshot, get_db_stats  # type: ignore
 try:
     from src.graph_builder import build_graph, analyze_graph  # type: ignore
-    from src.gen_ai import generate_case_analysis, answer_with_context, stream_answer  # type: ignore
+    from src.gen_ai import generate_case_analysis, answer_with_context, stream_answer, detect_contradictions  # type: ignore
     from src.pdf_generator import save_report as save_pdf_report  # type: ignore
     from src.rag import advanced_retrieve  # type: ignore
     from src.events_bus import publish_event, sse_stream_generator  # type: ignore
 except Exception:
     from graph_builder import build_graph, analyze_graph  # type: ignore
-    from gen_ai import generate_case_analysis, answer_with_context, stream_answer  # type: ignore
+    from gen_ai import generate_case_analysis, answer_with_context, stream_answer, detect_contradictions  # type: ignore
     from rag import advanced_retrieve  # type: ignore
     from events_bus import publish_event, sse_stream_generator  # type: ignore
 try:
@@ -397,6 +397,26 @@ def api_create_case():
 
 @app.get('/api/cases/<case_id>/export')
 @auth_required
+@app.post("/api/contradictions")
+def api_detect_contradictions():
+    """Identify logical contradictions in provided clues."""
+    data = request.get_json(silent=True) or {}
+    clues = data.get("clues", [])
+    if not clues:
+        # try fetching from DB if case_id provided
+        case_id = data.get('case_id')
+        if case_id:
+            with get_conn() as conn:
+                clues_rows = db_list_clues(conn, case_id)
+                clues = [r['text'] for r in clues_rows]
+    
+    if not clues:
+        return jsonify({"error": "No clues provided or found for case"}), 400
+        
+    result = detect_contradictions(clues)
+    return jsonify(result)
+
+
 def api_export_case(case_id):
     """Export all case data as JSON."""
     with get_conn() as conn:
