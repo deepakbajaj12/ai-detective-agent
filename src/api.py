@@ -77,6 +77,7 @@ def index():
             "POST /api/predict_suspects": "Rank suspects from provided clues",
             "GET /api/search?q=...": "Semantic/lexical search over clues",
             "POST /api/analysis": "Generate analytical case summary (AI / heuristic)",
+            "POST /api/contradictions": "Identify logical contradictions in clues (LLM-based)",
             "POST /api/documents/upload": "Upload PDF, extract text, auto-suggest suspects",
             "GET /api/documents": "List ingested documents",
             "POST /api/feedback": "Submit analyst feedback (confirm/reject/uncertain)",
