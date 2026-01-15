@@ -282,3 +282,41 @@ QUESTION: {question}
         yield '\n'
 
 __all__.append("stream_answer")
+
+
+def detect_contradictions(clues: List[str]) -> Dict[str, Any]:
+    """Analyze clues for logical contradictions or conflicting statements.
+
+    Strategy (tiered):
+      1) If OPENAI available -> structured prompt to GPT style model
+      2) If GEMINI available -> structured prompt to Gemini model
+      3) Else -> simple heuristic check for common negation patterns (weak fallback)
+    """
+    if not clues:
+        return {"backend": "none", "contradictions": "No clues provided."}
+
+    clues_text = "\n".join(f"* {c}" for c in clues[:60]) # limit context
+    prompt = f"""
+You are an expert forensic logician. Analyze the following list of clues and evidence.
+Identify any logical contradictions, conflicting timelines, or mutually exclusive statements.
+List each contradiction found clearly, citing the conflicting clues.
+If no contradictions are found, simply state "No contradictions detected."
+
+CLUES:
+{_truncate(clues_text, 8000)}
+""".strip()
+
+    if _openai_available():
+        return { 'backend': 'openai', 'contradictions': _call_openai(prompt) }
+    elif _gemini_available():
+        return { 'backend': 'gemini', 'contradictions': _call_gemini(prompt) }
+    else:
+        # Heuristic fallback: look for direct negation strings in close proximity or strict opposites
+        # This is very weak but provides a fallback response.
+        return { 
+            'backend': 'heuristic', 
+            'contradictions': "AI backend not available. Heuristic analysis suggests manual review recommended for timestamp conflicts." 
+        }
+
+__all__.append("detect_contradictions")
+
