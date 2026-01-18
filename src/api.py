@@ -51,6 +51,14 @@ except Exception:
             return 'memory'
 
 try:
+    from src.deception_detector import DeceptionDetector
+except ImportError:
+    try:
+        from deception_detector import DeceptionDetector
+    except ImportError:
+        DeceptionDetector = None # type: ignore
+
+try:
     from src.db import export_case_data  # type: ignore
 except ImportError:
     from db import export_case_data  # type: ignore
@@ -75,6 +83,7 @@ def index():
             "GET /api/suspects/<id>/attribution": "Token/clue attribution for a suspect (if generated)",
             "GET /api/suspects/<id>/risk_explanation": "Structured risk factor narrative",
             "POST /api/predict_suspects": "Rank suspects from provided clues",
+            "POST /api/deception-analysis": "Analyze statement for linguistic signs of deception",
             "GET /api/search?q=...": "Semantic/lexical search over clues",
             "POST /api/analysis": "Generate analytical case summary (AI / heuristic)",
             "POST /api/contradictions": "Identify logical contradictions in clues (LLM-based)",
@@ -1195,6 +1204,26 @@ def api_predict_suspects():
             train_and_save(BASE_DIR / "inputs" / "sample_training.json")
         ranked = rank_labels([text], top_k=3)
         return jsonify([{"label": l, "score": s} for l, s in ranked])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/deception-analysis")
+def api_deception_analysis():
+    """Analyze a witness statement or clue for signs of deception."""
+    if DeceptionDetector is None:
+        return jsonify({"error": "DeceptionDetector module not loaded"}), 503
+    
+    payload = request.get_json(silent=True) or {}
+    text = payload.get("text")
+    
+    if not text:
+        return jsonify({"error": "No 'text' field provided"}), 400
+        
+    try:
+        detector = DeceptionDetector()
+        result = detector.analyze_statement(text)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
