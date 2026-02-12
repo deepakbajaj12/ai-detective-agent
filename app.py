@@ -26,7 +26,7 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
 
 from flask import Flask, render_template_string, request, redirect, url_for
-from src.case_manager import list_cases, add_case, get_clues, add_clue, delete_case, update_case_status
+from src.case_manager import list_cases, add_case, get_clues, add_clue, delete_case, update_case_status, delete_clue
 
 
 app = Flask(__name__)
@@ -79,7 +79,12 @@ LIST_TEMPLATE = '''
                 <b>Clues:</b>
                 <ul>
                 {% for clue in clues[case[0]] %}
-                    <li>{{ clue }}</li>
+                    <li>
+                        {{ clue[1] }}
+                        <form action="{{ url_for('delete_clue_route', case_id=case[0], clue_id=clue[0]) }}" method="post" style="display:inline;">
+                             <button type="submit" style="background:none; border:none; color:red; cursor:pointer;" onclick="return confirm('Delete clue?')">[x]</button>
+                        </form>
+                    </li>
                 {% endfor %}
                 </ul>
                 <form class="clue-form" method="post" action="{{ url_for('add_clue_route', case_id=case[0]) }}">
@@ -130,6 +135,11 @@ def delete_case_route(case_id):
 def update_status_route(case_id):
     status = request.form['status']
     update_case_status(case_id, status)
+    return redirect(url_for('index'))
+
+@app.route('/delete_clue/<int:case_id>/<int:clue_id>', methods=['POST'])
+def delete_clue_route(case_id, clue_id):
+    delete_clue(clue_id)
     return redirect(url_for('index'))
 
 

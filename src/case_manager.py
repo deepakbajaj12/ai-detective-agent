@@ -64,15 +64,15 @@ def add_clue(case_id, clue):
 def get_clues(case_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT clue FROM clues WHERE case_id=?", (case_id,))
-    clues = [row[0] for row in cur.fetchall()]
+    cur.execute("SELECT id, clue FROM clues WHERE case_id=?", (case_id,))
+    clues = cur.fetchall()
     conn.close()
     return clues
 
-def update_case_status(case_id, status):
+def delete_clue(clue_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("UPDATE cases SET status=? WHERE id=?", (status, case_id))
+    cur.execute("DELETE FROM clues WHERE id = ?", (clue_id,))
     conn.commit()
     conn.close()
 
