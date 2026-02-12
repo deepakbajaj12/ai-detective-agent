@@ -26,7 +26,7 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
 
 from flask import Flask, render_template_string, request, redirect, url_for
-from src.case_manager import list_cases, add_case, get_clues, add_clue
+from src.case_manager import list_cases, add_case, get_clues, add_clue, delete_case
 
 
 app = Flask(__name__)
@@ -48,6 +48,8 @@ LIST_TEMPLATE = '''
         input[type=text] { padding: 8px; margin-right: 8px; border-radius: 4px; border: 1px solid #ccc; }
         button { padding: 8px 16px; border-radius: 4px; border: none; background: #007bff; color: #fff; cursor: pointer; }
         button:hover { background: #0056b3; }
+        .btn-danger { background: #dc3545; margin-left: 10px; }
+        .btn-danger:hover { background: #c82333; }
         .clue-form { margin-left: 20px; }
     </style>
 </head>
@@ -56,7 +58,14 @@ LIST_TEMPLATE = '''
         <h1>Case List</h1>
         {% for case in cases %}
         <div class="case">
-            <strong>{{ case[1] }}</strong> <span style="color: #888;">(Status: {{ case[2] }}, Created: {{ case[3] }})</span>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <strong>{{ case[1] }}</strong> <span style="color: #888;">(Status: {{ case[2] }}, Created: {{ case[3] }})</span>
+                </div>
+                <form method="post" action="{{ url_for('delete_case_route', case_id=case[0]) }}" style="margin: 0;">
+                    <button type="submit" class="btn-danger" onclick="return confirm('Are you sure?')">Delete Case</button>
+                </form>
+            </div>
             <div class="clues">
                 <b>Clues:</b>
                 <ul>
@@ -101,6 +110,11 @@ def add_case_route():
 def add_clue_route(case_id):
     clue = request.form['clue']
     add_clue(case_id, clue)
+    return redirect(url_for('index'))
+
+@app.route('/delete_case/<int:case_id>', methods=['POST'])
+def delete_case_route(case_id):
+    delete_case(case_id)
     return redirect(url_for('index'))
 
 
