@@ -58,7 +58,13 @@ LIST_TEMPLATE = '''
         <h1>Case List</h1>
         <form method="get" action="{{ url_for('index') }}" style="margin-bottom: 20px;">
             <input type="text" name="q" placeholder="Search cases..." value="{{ request.args.get('q', '') }}">
-            <button type="submit">Search</button>
+            <select name="status" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+                <option value="all" {% if request.args.get('status') == 'all' %}selected{% endif %}>All Statuses</option>
+                <option value="in-progress" {% if request.args.get('status') == 'in-progress' %}selected{% endif %}>In Progress</option>
+                <option value="solved" {% if request.args.get('status') == 'solved' %}selected{% endif %}>Solved</option>
+                <option value="cold" {% if request.args.get('status') == 'cold' %}selected{% endif %}>Cold</option>
+            </select>
+            <button type="submit">Filter</button>
             <a href="{{ url_for('index') }}" style="margin-left: 10px; text-decoration: none; color: #555;">Clear</a>
         </form>
         {% for case in cases %}
@@ -114,7 +120,8 @@ LIST_TEMPLATE = '''
 @app.route('/', methods=['GET'])
 def index():
     search_query = request.args.get('q')
-    cases = list_cases(search_query)
+    status_filter = request.args.get('status', 'all')
+    cases = list_cases(search_query, status_filter)
     clues = {case[0]: get_clues(case[0]) for case in cases}
     return render_template_string(LIST_TEMPLATE, cases=cases, clues=clues)
 

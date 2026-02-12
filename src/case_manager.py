@@ -31,13 +31,21 @@ def add_case(name, status="in-progress"):
     conn.commit()
     conn.close()
 
-def list_cases(search_query=None):
+def list_cases(search_query=None, status_filter=None):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    query = "SELECT id, name, status, created_at FROM cases WHERE 1=1"
+    params = []
+    
     if search_query:
-        cur.execute("SELECT id, name, status, created_at FROM cases WHERE name LIKE ?", ('%' + search_query + '%',))
-    else:
-        cur.execute("SELECT id, name, status, created_at FROM cases")
+        query += " AND name LIKE ?"
+        params.append('%' + search_query + '%')
+    
+    if status_filter and status_filter != 'all':
+        query += " AND status = ?"
+        params.append(status_filter)
+        
+    cur.execute(query, params)
     cases = cur.fetchall()
     conn.close()
     return cases
