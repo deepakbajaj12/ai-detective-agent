@@ -39,6 +39,14 @@ def list_cases():
     conn.close()
     return cases
 
+def delete_case(case_id):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM clues WHERE case_id = ?", (case_id,))
+    cur.execute("DELETE FROM cases WHERE id = ?", (case_id,))
+    conn.commit()
+    conn.close()
+
 def add_clue(case_id, clue):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
