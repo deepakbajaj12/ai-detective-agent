@@ -47,6 +47,13 @@ def delete_case(case_id):
     conn.commit()
     conn.close()
 
+def update_case_status(case_id, status):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE cases SET status = ? WHERE id = ?", (status, case_id))
+    conn.commit()
+    conn.close()
+
 def add_clue(case_id, clue):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()

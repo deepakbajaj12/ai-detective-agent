@@ -26,7 +26,7 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
 
 from flask import Flask, render_template_string, request, redirect, url_for
-from src.case_manager import list_cases, add_case, get_clues, add_clue, delete_case
+from src.case_manager import list_cases, add_case, get_clues, add_clue, delete_case, update_case_status
 
 
 app = Flask(__name__)
@@ -60,7 +60,16 @@ LIST_TEMPLATE = '''
         <div class="case">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <strong>{{ case[1] }}</strong> <span style="color: #888;">(Status: {{ case[2] }}, Created: {{ case[3] }})</span>
+                    <strong>{{ case[1] }}</strong>
+                    <form action="{{ url_for('update_status_route', case_id=case[0]) }}" method="post" style="display:inline; margin-left: 10px;">
+                        <select name="status" style="padding: 4px;">
+                            <option value="in-progress" {% if case[2] == 'in-progress' %}selected{% endif %}>In Progress</option>
+                            <option value="solved" {% if case[2] == 'solved' %}selected{% endif %}>Solved</option>
+                            <option value="cold" {% if case[2] == 'cold' %}selected{% endif %}>Cold</option>
+                        </select>
+                        <button type="submit" style="padding: 4px 8px; font-size: 0.8em; background: #6c757d;">Update</button>
+                    </form>
+                    <span style="color: #888; margin-left: 10px; font-size: 0.9em;">(Created: {{ case[3] }})</span>
                 </div>
                 <form method="post" action="{{ url_for('delete_case_route', case_id=case[0]) }}" style="margin: 0;">
                     <button type="submit" class="btn-danger" onclick="return confirm('Are you sure?')">Delete Case</button>
@@ -115,6 +124,12 @@ def add_clue_route(case_id):
 @app.route('/delete_case/<int:case_id>', methods=['POST'])
 def delete_case_route(case_id):
     delete_case(case_id)
+    return redirect(url_for('index'))
+
+@app.route('/update_status/<int:case_id>', methods=['POST'])
+def update_status_route(case_id):
+    status = request.form['status']
+    update_case_status(case_id, status)
     return redirect(url_for('index'))
 
 
