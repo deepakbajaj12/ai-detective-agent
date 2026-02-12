@@ -56,6 +56,11 @@ LIST_TEMPLATE = '''
 <body>
     <div class="container">
         <h1>Case List</h1>
+        <form method="get" action="{{ url_for('index') }}" style="margin-bottom: 20px;">
+            <input type="text" name="q" placeholder="Search cases..." value="{{ request.args.get('q', '') }}">
+            <button type="submit">Search</button>
+            <a href="{{ url_for('index') }}" style="margin-left: 10px; text-decoration: none; color: #555;">Clear</a>
+        </form>
         {% for case in cases %}
         <div class="case">
             <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -108,7 +113,8 @@ LIST_TEMPLATE = '''
 
 @app.route('/', methods=['GET'])
 def index():
-    cases = list_cases()
+    search_query = request.args.get('q')
+    cases = list_cases(search_query)
     clues = {case[0]: get_clues(case[0]) for case in cases}
     return render_template_string(LIST_TEMPLATE, cases=cases, clues=clues)
 
